@@ -8,9 +8,27 @@ import VoxDomain
 enum VaultImageDecoder {
     private final class ProviderContext {
         let session: VaultMediaReadSession
+        private let lock = NSLock()
+        private var readFailure: VaultError?
 
         init(session: VaultMediaReadSession) {
             self.session = session
+        }
+
+        func recordReadFailure(_ error: VaultError) {
+            lock.lock()
+            defer { lock.unlock() }
+            if readFailure == nil {
+                readFailure = error
+            }
+        }
+
+        func throwIfReadFailed() throws {
+            lock.lock()
+            defer { lock.unlock() }
+            if let readFailure {
+                throw readFailure
+            }
         }
     }
 
@@ -19,7 +37,8 @@ enum VaultImageDecoder {
             throw VaultError.dadoAdulterado
         }
 
-        let context = Unmanaged.passRetained(ProviderContext(session: session))
+        let providerContext = ProviderContext(session: session)
+        let context = Unmanaged.passRetained(providerContext)
         var callbacks = CGDataProviderDirectCallbacks(
             version: 0,
             getBytePointer: nil,
@@ -40,6 +59,7 @@ enum VaultImageDecoder {
             throw VaultError.dadoAdulterado
         }
         guard let source = CGImageSourceCreateWithDataProvider(provider, nil) else {
+            try providerContext.throwIfReadFailed()
             throw VaultError.formatoDeMidiaNaoSuportado
         }
 
@@ -49,7 +69,9 @@ enum VaultImageDecoder {
             kCGImageSourceShouldCacheImmediately: NSNumber(value: true),
             kCGImageSourceThumbnailMaxPixelSize: NSNumber(value: maximumPixelSize)
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        try providerContext.throwIfReadFailed()
+        guard let image else {
             throw VaultError.formatoDeMidiaNaoSuportado
         }
         return image
@@ -61,14 +83,31 @@ enum VaultImageDecoder {
         _ position: off_t,
         _ count: Int
     ) -> Int {
-        guard let info, position >= 0, count > 0 else { return 0 }
-        let (end, overflow) = Int64(position).addingReportingOverflow(Int64(count))
-        guard !overflow else { return 0 }
+        guard let info else { return 0 }
         let context = Unmanaged<ProviderContext>.fromOpaque(info).takeUnretainedValue()
+        guard position >= 0 else {
+            context.recordReadFailure(.dadoAdulterado)
+            return 0
+        }
+        guard count > 0 else { return 0 }
+        let (end, overflow) = Int64(position).addingReportingOverflow(Int64(count))
+        guard !overflow else {
+            context.recordReadFailure(.dadoAdulterado)
+            return 0
+        }
         let target = UnsafeMutableRawBufferPointer(start: buffer, count: count)
         do {
-            return try context.session.copyBytes(in: Int64(position)..<end, to: target)
+            let copied = try context.session.copyBytes(in: Int64(position)..<end, to: target)
+            guard copied == count else {
+                context.recordReadFailure(.dadoAdulterado)
+                return 0
+            }
+            return copied
+        } catch let error as VaultError {
+            context.recordReadFailure(error)
+            return 0
         } catch {
+            context.recordReadFailure(.dadoAdulterado)
             return 0
         }
     }

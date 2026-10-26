@@ -394,10 +394,6 @@ public struct ItemDetailView: View {
     }
 }
 
-private struct SendableCGImage: @unchecked Sendable {
-    let image: CGImage
-}
-
 struct DetalhesItemSheet: View {
     let item: ItemDoCofre
     @Environment(\.dismiss) private var dismiss

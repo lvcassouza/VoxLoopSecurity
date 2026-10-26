@@ -171,7 +171,3 @@ public struct VoxTileView: View {
         }
     }
 }
-
-private struct SendableCGImage: @unchecked Sendable {
-    let image: CGImage
-}

@@ -1,6 +1,10 @@
 import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import VoxDomain
+@testable import VoxUI
 
 @MainActor
 final class VaultAccessManagerTests: XCTestCase {
@@ -281,6 +285,84 @@ final class VaultAccessManagerTests: XCTestCase {
             XCTAssertEqual(error, .dadoAdulterado)
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "The source must remain untouched on export failure")
+    }
+
+    func testThumbnailRejectsImageIOPartialResultWhenLaterChunkIsTampered() async throws {
+        let passphrase = "CredencialDeTesteMiniaturaAutenticada123"
+        _ = try await configureVault(passphrase)
+
+        let fixture = try makeLargePNGFixture()
+        let chunkSize = 1_048_576
+        XCTAssertGreaterThan(fixture.count, chunkSize * 2, "The fixture must span multiple authenticated chunks")
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxThumbnailTamper-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try fixture.write(to: source)
+
+        let item = try await manager.importarArquivo(em: source, nome: source.lastPathComponent, tipo: .foto)
+        let session = try await manager.abrirSessaoDeLeitura(id: item.id)
+        defer { manager.fecharSessaoDeLeitura(id: session.sessionID) }
+
+        let encryptedURL = vaultDirectory
+            .appendingPathComponent("items", isDirectory: true)
+            .appendingPathComponent("\(item.id.uuidString).enc")
+        let tamperOffset = UInt64(chunkSize + 20 + 4 + 128)
+        let readHandle = try FileHandle(forReadingFrom: encryptedURL)
+        try readHandle.seek(toOffset: tamperOffset)
+        let originalByte = try XCTUnwrap(readHandle.read(upToCount: 1)?.first)
+        try readHandle.close()
+        let encryptedFile = try FileHandle(forWritingTo: encryptedURL)
+        try encryptedFile.seek(toOffset: tamperOffset)
+        try encryptedFile.write(contentsOf: Data([originalByte ^ 0x01]))
+        try encryptedFile.close()
+
+        XCTAssertThrowsError(try VaultImageDecoder.thumbnail(from: session, maximumPixelSize: 256)) {
+            XCTAssertEqual($0 as? VaultError, .dadoAdulterado)
+        }
+    }
+
+    private func makeLargePNGFixture() throws -> Data {
+        let width = 1_024
+        let height = 1_024
+        var pixels = Data(count: width * height * 4)
+        pixels.withUnsafeMutableBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var state: UInt32 = 0x1234_5678
+            for pixel in 0..<(width * height) {
+                state = state &* 1_664_525 &+ 1_013_904_223
+                let offset = pixel * 4
+                bytes[offset] = UInt8(truncatingIfNeeded: state >> 16)
+                bytes[offset + 1] = UInt8(truncatingIfNeeded: state >> 8)
+                bytes[offset + 2] = UInt8(truncatingIfNeeded: state)
+                bytes[offset + 3] = 0xFF
+            }
+        }
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+              ) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+        return output as Data
     }
 
     private func configureVault(_ passphrase: String) async throws -> String {
