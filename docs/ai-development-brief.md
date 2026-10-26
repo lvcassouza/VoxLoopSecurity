@@ -104,6 +104,8 @@ Após a aprovação da fase 1, implemente o formato local e a persistência crip
 
 Implemente visualização sem cache indevido, exportação com confirmação de cópia externa, exclusão somente da cópia no cofre, e troca de credencial conforme o ADR. A UI sempre declara o efeito sobre origem e backups anteriores.
 
+**Estado parcial (26 de outubro de 2026):** a implementação experimental oferece leitura autenticada por faixa, prévias em memória, reprodução por `AVAssetResourceLoader`, exportação temporária protegida e seleção nativa de destino, além de exclusão com estado de erro explícito. `swift test` (7 testes) e build do esquema `Vox` para iOS Simulator passaram; isso não valida reprodução/exportação em iPhones físicos nem constitui auditoria. O gate humano da [Issue #1](https://github.com/lvcassouza/VoxLoopSecurity/issues/1) permanece aberto.
+
 **Concluída quando:** cada ação apresenta resultado inequívoco e erros deixam o estado anterior consistente; nenhum fluxo sugere apagar cópias que o app não controla.
 
 ### Fase 5 — Backup, verificação e restauração

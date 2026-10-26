@@ -14,7 +14,11 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
     case cofreNaoVazioParaRestauracao
     case itemNaoEncontrado
     case quantidadeDeItensInvalida
-    case exportacaoIndisponivelNestaVersao
+    case intervaloDeLeituraInvalido
+    case exportacaoTemporariaJaExiste
+    case falhaNaExportacao
+    case falhaNaLimpezaDaExclusao
+    case formatoDeMidiaNaoSuportado
     case formatoCofreIncompativel
     case cofreBloqueado
     case restauracaoIndisponivelNestaVersao
@@ -32,7 +36,7 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
         case .confirmacaoInvalida:
             return "O trecho digitado não corresponde ao código exibido."
         case .espacoInsuficiente:
-            return "Espaço em disco insuficiente para concluir a importação."
+            return "Espaço em disco insuficiente para concluir a operação."
         case .operacaoInterrompida:
             return "A operação foi interrompida antes de ser concluída."
         case .dadoAdulterado:
@@ -45,8 +49,16 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
             return "O item solicitado não foi encontrado no cofre."
         case .quantidadeDeItensInvalida:
             return "Adicione entre 1 e 12 itens sintéticos."
-        case .exportacaoIndisponivelNestaVersao:
-            return "A exportação de arquivos reais não está disponível nesta versão demonstrativa."
+        case .intervaloDeLeituraInvalido:
+            return "Não foi possível ler este trecho do item."
+        case .exportacaoTemporariaJaExiste:
+            return "Não foi possível preparar o arquivo para exportação."
+        case .falhaNaExportacao:
+            return "Não foi possível concluir a exportação."
+        case .falhaNaLimpezaDaExclusao:
+            return "O item foi removido do cofre, mas um arquivo cifrado residual não pôde ser limpo agora. Bloqueie e abra o cofre novamente para tentar a limpeza."
+        case .formatoDeMidiaNaoSuportado:
+            return "Este formato de mídia não pode ser exibido pelo Vox."
         case .formatoCofreIncompativel:
             return "O formato deste cofre não é compatível com esta versão do Vox."
         case .cofreBloqueado:

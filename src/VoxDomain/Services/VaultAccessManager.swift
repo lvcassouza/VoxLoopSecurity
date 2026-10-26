@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Owns the visible access state; cryptographic work and disk I/O run in `VaultFileStore`.
 @MainActor
@@ -18,6 +21,12 @@ public final class VaultAccessManager: ObservableObject {
     private let store: VaultFileStore
     private var bloqueioEmAndamento: Task<Void, Never>?
     private var sessionEpoch: UInt64 = 0
+    private var mediaReadSessions: [UUID: VaultMediaReadSession] = [:]
+    private var exportDirectories: [UUID: URL] = [:]
+
+    private static var exportStagingDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("VoxExportStaging", isDirectory: true)
+    }
 
     public static func diretorioDoCofrePadrao() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -34,6 +43,7 @@ public final class VaultAccessManager: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: directory.appendingPathComponent("vault.header").path)
         self.isConfigurado = exists
         self.estadoAcesso = exists ? .bloqueado : .naoConfigurado
+        Self.limparExportacoesAbandonadas()
         // Keep the source-compatible arguments, but never trust caller-supplied access state.
         _ = configuradoInicial
         self.itens = exists ? [] : itensIniciais
@@ -118,6 +128,7 @@ public final class VaultAccessManager: ObservableObject {
         guard isConfigurado else { return }
         estadoAcesso = .bloqueado
         sessionEpoch &+= 1
+        invalidarConteudoTransitório()
         itens.removeAll(keepingCapacity: false)
         estadoBackup = .nuncaCriado
         ultimoBackupData = nil
@@ -163,6 +174,7 @@ public final class VaultAccessManager: ObservableObject {
     }
 
     public func apagarCofreInacessivel() async {
+        invalidarConteudoTransitório()
         try? await store.eraseVault()
         itens.removeAll(keepingCapacity: false)
         isConfigurado = false
@@ -242,23 +254,151 @@ public final class VaultAccessManager: ObservableObject {
         return quantidade
     }
 
-    public func exportarItem(id: UUID) throws {
+    public func abrirSessaoDeLeitura(id: UUID) async throws -> VaultMediaReadSession {
+        guard estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else { throw VaultError.cofreBloqueado }
         guard let item = itens.first(where: { $0.id == id }) else { throw VaultError.itemNaoEncontrado }
         guard item.status != .adulterado else { throw VaultError.dadoAdulterado }
-        throw VaultError.exportacaoIndisponivelNestaVersao
+        let epoch = sessionEpoch
+        let session = try await store.makeMediaReadSession(id: id)
+        guard epoch == sessionEpoch, estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else {
+            session.invalidate()
+            throw VaultError.cofreBloqueado
+        }
+        mediaReadSessions[session.sessionID] = session
+        return session
+    }
+
+    public func fecharSessaoDeLeitura(id: UUID) {
+        mediaReadSessions.removeValue(forKey: id)?.invalidate()
+    }
+
+    /// Decrypts selected items to protected temporary files only after explicit UI confirmation.
+    public func prepararExportacao(ids: [UUID]) async throws -> LoteExportacaoPreparado {
+        guard estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else { throw VaultError.cofreBloqueado }
+        guard !ids.isEmpty, Set(ids).count == ids.count else { throw VaultError.itemNaoEncontrado }
+        let selectedItems = try ids.map { id in
+            guard let item = itens.first(where: { $0.id == id }) else { throw VaultError.itemNaoEncontrado }
+            guard item.status != .adulterado else { throw VaultError.dadoAdulterado }
+            return item
+        }
+        let epoch = sessionEpoch
+        let batchID = UUID()
+        let batchDirectory = Self.exportStagingDirectory.appendingPathComponent(batchID.uuidString, isDirectory: true)
+        exportDirectories[batchID] = batchDirectory
+        do {
+            try FileManager.default.createDirectory(at: batchDirectory, withIntermediateDirectories: true)
+            try Self.protegerDiretorioExportacao(batchDirectory)
+            var prepared: [ArquivoPreparadoParaExportacao] = []
+            var usedNames = Set<String>()
+            for item in selectedItems {
+                guard epoch == sessionEpoch, estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else {
+                    throw VaultError.cofreBloqueado
+                }
+                let session = try await abrirSessaoDeLeitura(id: item.id)
+                let filename = Self.nomeUnicoParaExportacao(item.nomeOriginal, tipo: item.tipo, usedNames: &usedNames)
+                let destination = batchDirectory.appendingPathComponent(filename, isDirectory: false)
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try session.exportDecryptedFile(to: destination)
+                    }.value
+                    guard epoch == sessionEpoch, estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else {
+                        throw VaultError.cofreBloqueado
+                    }
+                    prepared.append(
+                        ArquivoPreparadoParaExportacao(
+                            url: destination,
+                            nomeArquivo: filename,
+                            tipo: item.tipo
+                        )
+                    )
+                    fecharSessaoDeLeitura(id: session.sessionID)
+                } catch {
+                    fecharSessaoDeLeitura(id: session.sessionID)
+                    throw error
+                }
+            }
+            return LoteExportacaoPreparado(id: batchID, arquivos: prepared)
+        } catch {
+            concluirExportacao(id: batchID)
+            throw Self.erroDeExportacao(error)
+        }
+    }
+
+    public func concluirExportacao(id: UUID) {
+        guard let directory = exportDirectories.removeValue(forKey: id) else { return }
+        try? FileManager.default.removeItem(at: directory)
     }
 
     public func apagarItemDoCofre(id: UUID) async throws {
         guard estadoAcesso == .desbloqueado else { throw VaultError.cofreBloqueado }
-        try await store.deleteItem(id: id)
-        itens.removeAll { $0.id == id }
-        atualizarEstadoBackupAposModificacao()
-        SanitizedLogger.shared.log(.itemLocalExcluido)
+        do {
+            try await store.deleteItem(id: id)
+            atualizarEstadoAposExclusao(id: id)
+        } catch let error as VaultError where error == .falhaNaLimpezaDaExclusao {
+            atualizarEstadoAposExclusao(id: id)
+            throw error
+        }
     }
 
     /// Test-only UI affordance; it does not alter ciphertext or the authenticated index.
     public func adulterarItemParaTeste(id: UUID) {
         if let index = itens.firstIndex(where: { $0.id == id }) { itens[index].status = .adulterado }
+    }
+
+    private func atualizarEstadoAposExclusao(id: UUID) {
+        itens.removeAll { $0.id == id }
+        atualizarEstadoBackupAposModificacao()
+        SanitizedLogger.shared.log(.itemLocalExcluido)
+    }
+
+    private func invalidarConteudoTransitório() {
+        for session in mediaReadSessions.values { session.invalidate() }
+        mediaReadSessions.removeAll(keepingCapacity: false)
+        let batches = Array(exportDirectories.keys)
+        for batch in batches { concluirExportacao(id: batch) }
+    }
+
+    private static func limparExportacoesAbandonadas() {
+        try? FileManager.default.removeItem(at: exportStagingDirectory)
+    }
+
+    private static func protegerDiretorioExportacao(_ url: URL) throws {
+        try VaultTemporaryStorageProtection.apply(to: url)
+    }
+
+    private static func nomeUnicoParaExportacao(
+        _ original: String,
+        tipo: TipoDeMidia,
+        usedNames: inout Set<String>
+    ) -> String {
+        let lastComponent = URL(fileURLWithPath: original).lastPathComponent
+        let filtered = String(lastComponent.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0) && $0 != "/" && $0 != "\\" && $0 != ":"
+        }.prefix(180))
+        let baseName = !filtered.isEmpty && filtered != "." && filtered != ".."
+            ? filtered
+            : (tipo == .foto ? "Foto do Vox.jpg" : "Vídeo do Vox.mov")
+        let baseURL = URL(fileURLWithPath: baseName)
+        let stem = baseURL.deletingPathExtension().lastPathComponent
+        let fileExtension = baseURL.pathExtension
+        var candidate = baseName
+        var suffix = 2
+        while !usedNames.insert(candidate.lowercased()).inserted {
+            let suffixName = "\(stem) (\(suffix))"
+            candidate = fileExtension.isEmpty ? suffixName : "\(suffixName).\(fileExtension)"
+            suffix += 1
+        }
+        return candidate
+    }
+
+    private static func erroDeExportacao(_ error: Error) -> Error {
+        if let error = error as? VaultError { return error }
+        let nsError = error as NSError
+        if nsError.code == NSFileWriteOutOfSpaceError ||
+            (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOSPC)) {
+            return VaultError.espacoInsuficiente
+        }
+        return VaultError.falhaNaExportacao
     }
 
     // MARK: - Explicitly demonstrative backup flows
