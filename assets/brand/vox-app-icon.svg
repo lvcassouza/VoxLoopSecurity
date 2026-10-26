@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" role="img" aria-labelledby="title">
+  <title id="title">Ícone Vox</title>
+  <rect width="1024" height="1024" fill="#12282D"/>
+  <path d="M718 234A374 374 0 1 0 780 748" stroke="#DDF7EE" stroke-width="66" stroke-linecap="round"/>
+  <path d="m336 382 150 298c13 27 49 27 62 0l150-298" stroke="#67DCC0" stroke-width="88" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
