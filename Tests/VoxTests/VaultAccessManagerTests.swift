@@ -482,6 +482,152 @@ final class VaultAccessManagerTests: XCTestCase {
         XCTAssertEqual(restoredManager.estadoAcesso, .desbloqueado)
     }
 
+    func testHardwareBenchmarkExecution() async throws {
+        let resultado = try await HardwareBenchmarkService.shared.executarDiagnosticoCompleto()
+        XCTAssertGreaterThan(resultado.tempoDerivacaoArgon2idMs, 0)
+        XCTAssertGreaterThan(resultado.memoriaResidenteMB, 0)
+        XCTAssertGreaterThan(resultado.taxaCriptografiaAESMBs, 0)
+        XCTAssertFalse(resultado.statusHardware.isEmpty)
+    }
+
+    func testInterDeviceRestoreSimulation() async throws {
+        // Simulação do Aparelho A (origem)
+        let dirAparelhoA = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxDeviceA-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dirAparelhoA) }
+        let managerA = VaultAccessManager(storageDirectory: dirAparelhoA)
+
+        let credencialA = credencialAmbiente("PADRAO_DESBLOQUEIO_APARELHO_A", indicativo: "PADRAO_DESBLOQUEIO_APARELHO_A")
+        let codigoRecuperacaoA = try await configureVault(managerA, passphrase: credencialA)
+
+        // Criar fixtures de mídia (uma imagem e um vídeo sintético)
+        let sourceDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxFixtures-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sourceDir) }
+
+        let fotoURL = sourceDir.appendingPathComponent("foto_teste.png")
+        let fotoBytes = try makeLargePNGFixture()
+        try fotoBytes.write(to: fotoURL)
+
+        let videoURL = sourceDir.appendingPathComponent("video_teste.mov")
+        var videoBytes = Data("synthetic-video-header".utf8)
+        videoBytes.append(Data(repeating: 0x7E, count: 500_000))
+        try videoBytes.write(to: videoURL)
+
+        let itemFoto = try await managerA.importarArquivo(em: fotoURL, nome: "foto_teste.png", tipo: .foto)
+        let itemVideo = try await managerA.importarArquivo(em: videoURL, nome: "video_teste.mov", tipo: .video, duracao: 12.0)
+
+        XCTAssertEqual(managerA.itens.count, 2)
+        XCTAssertEqual(try Data(contentsOf: fotoURL), fotoBytes, "Origem da foto deve permanecer intacta")
+        XCTAssertEqual(try Data(contentsOf: videoURL), videoBytes, "Origem do vídeo deve permanecer intacta")
+
+        // Aparelho A prepara pacote .voxbackup para exportação (AirDrop / Compartilhamento de arquivos)
+        let backupPreparado = try await managerA.prepararBackup()
+        let pacoteTransferido = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxSharedPackage-\(UUID().uuidString).voxbackup", isDirectory: true)
+        try FileManager.default.copyItem(at: backupPreparado.url, to: pacoteTransferido)
+        defer { try? FileManager.default.removeItem(at: pacoteTransferido) }
+        managerA.cancelarBackup(id: backupPreparado.id)
+
+        // Validar integridade do pacote transferido: zero texto claro
+        let packageNames = Set(try FileManager.default.contentsOfDirectory(atPath: pacoteTransferido.path))
+        XCTAssertTrue(packageNames.contains("backup.manifest"))
+        XCTAssertTrue(packageNames.contains("vault.header"))
+        XCTAssertTrue(packageNames.contains("vault.index"))
+        XCTAssertTrue(packageNames.contains("items"))
+
+        let encryptedFiles = try FileManager.default.contentsOfDirectory(
+            at: pacoteTransferido.appendingPathComponent("items"),
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(encryptedFiles.count, 2)
+        for itemURL in encryptedFiles {
+            XCTAssertTrue(itemURL.lastPathComponent.hasSuffix(".enc"), "Todos os itens no backup devem ser cifras .enc")
+            let data = try Data(contentsOf: itemURL)
+            XCTAssertFalse(data.contains(Data("synthetic-video-header".utf8)), "Cifra do item não pode vazar texto claro")
+        }
+
+        // Simulação do Aparelho B (destino independente)
+        let dirAparelhoB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxDeviceB-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dirAparelhoB) }
+        let managerB = VaultAccessManager(storageDirectory: dirAparelhoB)
+
+        XCTAssertFalse(managerB.isConfigurado)
+        XCTAssertEqual(managerB.estadoAcesso, .naoConfigurado)
+
+        // Aparelho B verifica o pacote antes de restaurar
+        let resumo = try await managerB.verificarBackup(em: pacoteTransferido, codigoRecuperacao: codigoRecuperacaoA)
+        XCTAssertEqual(resumo.contagemItens, 2)
+        XCTAssertFalse(managerB.isConfigurado, "Verificação não deve configurar o cofre")
+
+        // Aparelho B falha com código de recuperação incorreto
+        do {
+            _ = try await managerB.prepararRestauracao(
+                de: pacoteTransferido,
+                codigoRecuperacao: "00000000-00000000-00000000-00000000",
+                novaCredencial: credencialAmbiente("PADRAO_DESBLOQUEIO_APARELHO_B", indicativo: "PADRAO_DESBLOQUEIO_APARELHO_B"),
+                confirmacao: credencialAmbiente("PADRAO_DESBLOQUEIO_APARELHO_B", indicativo: "PADRAO_DESBLOQUEIO_APARELHO_B")
+            )
+            XCTFail("Restauração com código incorreto deve falhar")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .codigoRecuperacaoInvalido)
+        }
+
+        // Aparelho B restaura com nova credencial independente
+        let credencialB = credencialAmbiente("PADRAO_DESBLOQUEIO_APARELHO_B", indicativo: "PADRAO_DESBLOQUEIO_APARELHO_B")
+        let restauracao = try await managerB.prepararRestauracao(
+            de: pacoteTransferido,
+            codigoRecuperacao: codigoRecuperacaoA,
+            novaCredencial: credencialB,
+            confirmacao: credencialB
+        )
+
+        let codigoRecuperacaoB = restauracao.codigoRecuperacao
+        XCTAssertNotEqual(codigoRecuperacaoB, codigoRecuperacaoA, "O código de recuperação do Aparelho B deve ser novo e rotacionado")
+
+        try await managerB.confirmarNovoCodigoRecuperacao(
+            id: restauracao.id,
+            trechoDigitado: String(codigoRecuperacaoB.filter(\.isHexDigit).suffix(8))
+        )
+
+        XCTAssertTrue(managerB.isConfigurado)
+        XCTAssertEqual(managerB.estadoAcesso, .desbloqueado)
+        XCTAssertEqual(managerB.itens.count, 2)
+
+        // Validar leitura fiel dos itens no Aparelho B
+        let readSessionFoto = try await managerB.abrirSessaoDeLeitura(id: itemFoto.id)
+        var recoveredFoto = Data()
+        var offsetFoto: Int64 = 0
+        let chunkSize: Int64 = 1_048_576
+        while offsetFoto < Int64(fotoBytes.count) {
+            let end = min(Int64(fotoBytes.count), offsetFoto + chunkSize)
+            recoveredFoto.append(try readSessionFoto.read(range: offsetFoto..<end))
+            offsetFoto = end
+        }
+        XCTAssertEqual(recoveredFoto, fotoBytes, "Bytes da foto restaurada devem ser idênticos aos originais")
+
+        let readSessionVideo = try await managerB.abrirSessaoDeLeitura(id: itemVideo.id)
+        var recoveredVideo = Data()
+        var offsetVideo: Int64 = 0
+        while offsetVideo < Int64(videoBytes.count) {
+            let end = min(Int64(videoBytes.count), offsetVideo + chunkSize)
+            recoveredVideo.append(try readSessionVideo.read(range: offsetVideo..<end))
+            offsetVideo = end
+        }
+        XCTAssertEqual(recoveredVideo, videoBytes, "Bytes do vídeo restaurado devem ser idênticos aos originais")
+
+        // Validar isolamento de credenciais no Aparelho B
+        managerB.bloquearCofre()
+        let desbloqueouComCredencialAntiga = await managerB.desbloquearComCredencial(credencialA)
+        XCTAssertFalse(desbloqueouComCredencialAntiga, "Credencial do Aparelho A não pode desbloquear o Aparelho B")
+
+        let desbloqueouComNovaCredencial = await managerB.desbloquearComCredencial(credencialB)
+        XCTAssertTrue(desbloqueouComNovaCredencial, "Aparelho B deve desbloquear com sua nova credencial")
+    }
+
+
     private func backupPackageBytes(at directory: URL) throws -> [String: Data] {
         let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))
         var files: [String: Data] = [:]

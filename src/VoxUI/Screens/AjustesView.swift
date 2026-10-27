@@ -11,6 +11,7 @@ public struct AjustesView: View {
 
     @State private var mostrarTrocarCredencial: Bool = false
     @State private var mostrarNovoCodigo: Bool = false
+    @State private var mostrarDiagnosticoHardware: Bool = false
     @State private var mostrarConfirmacaoApagarCofre: Bool = false
     @State private var textoConfirmacaoDigitado: String = ""
 
@@ -49,7 +50,7 @@ public struct AjustesView: View {
                 } header: {
                     Text("Recuperação")
                 } footer: {
-                    Text("O código recupera o acesso local, mas não há criação nem restauração de backup nesta fase.")
+                    Text("O código recupera o acesso local caso você esqueça sua credencial principal.")
                         .font(.system(size: 12))
                         .foregroundColor(VoxColors.inkSecondary)
                 }
@@ -78,20 +79,32 @@ public struct AjustesView: View {
                     }
                 }
 
-                // 4. Armazenamento
+                // 4. Armazenamento e Hardware
                 Section {
                     LabeledContent("Tamanho dos itens desbloqueados", value: espacoTotalFormatado)
+
+                    Button(action: { mostrarDiagnosticoHardware = true }) {
+                        HStack {
+                            Label("Diagnóstico de hardware e criptografia", systemImage: "cpu")
+                                .foregroundColor(VoxColors.brand)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(VoxColors.inkSecondary)
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Arquivos reais")
+                        Text("Armazenamento soberano")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(VoxColors.ink)
-                        Text("A seleção lê apenas os itens escolhidos e grava uma cópia cifrada. O arquivo de origem permanece na Fototeca. A exportação cria uma cópia externa; backup real ainda não está disponível.")
+                        Text("A seleção lê os arquivos escolhidos, grava cópias cifradas no sandbox e mantém as origens na Fototeca. O backup portátil (.voxbackup) e a verificação estão disponíveis na aba Backup.")
                             .font(.system(size: 12))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
                     .padding(.vertical, 4)
                 } header: {
-                    Text("Armazenamento")
+                    Text("Armazenamento e Hardware")
                 }
 
                 // 5. Sobre
@@ -129,6 +142,9 @@ public struct AjustesView: View {
             }
             .sheet(isPresented: $mostrarTrocarCredencial) {
                 TrocarCredencialSheet(accessManager: accessManager)
+            }
+            .sheet(isPresented: $mostrarDiagnosticoHardware) {
+                DiagnosticoHardwareView()
             }
             .confirmationDialog(
                 "Apagar o cofre local?",
