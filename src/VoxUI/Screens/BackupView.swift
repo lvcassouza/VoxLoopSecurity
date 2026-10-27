@@ -1,22 +1,23 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(VoxDomain)
 import VoxDomain
 #endif
 
-/// Tela da aba Backup (seção 6.7 de ui-visual-spec.md).
+/// User-controlled export and verification of an encrypted backup package.
 public struct BackupView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onNavegarParaRestauracao: () -> Void
 
-    @State private var emProgressoCriacao: Bool = false
-    @State private var mostrarFolhaVerificacao: Bool = false
-    @State private var resultadoVerificacao: ResultadoVerificacaoBackup?
-    @State private var modoVerificacaoSimulada: ModoSimulacaoBackup = .integro
+    @State private var preparado: BackupPreparado?
+    @State private var mostrarSeletorExportacao = false
+    @State private var mostrarVerificacao = false
+    @State private var preparando = false
+    @State private var tarefaPreparacao: Task<Void, Never>?
+    @State private var erro: String?
+    @State private var mensagem: String?
 
-    public init(
-        accessManager: VaultAccessManager,
-        onNavegarParaRestauracao: @escaping () -> Void
-    ) {
+    public init(accessManager: VaultAccessManager, onNavegarParaRestauracao: @escaping () -> Void) {
         self.accessManager = accessManager
         self.onNavegarParaRestauracao = onNavegarParaRestauracao
     }
@@ -26,29 +27,25 @@ public struct BackupView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Demonstração de backup")
+                        Text("Backup cifrado")
                             .font(.system(size: 26, weight: .bold))
                             .foregroundColor(VoxColors.ink)
-
-                        Text("Os botões abaixo alteram estados de exemplo. Nenhum arquivo de backup é criado ou criptografado.")
+                        Text("Crie uma cópia cifrada e escolha onde guardá-la. O Vox não envia backups para servidores.")
                             .font(.system(size: 15))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
 
-                    // Card de Estado Principal (1 de 3 estados)
-                    cardEstadoPrincipal
+                    estadoDoBackup
 
-                    // Bloco fixo de esclarecimento
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "info.circle")
                             .font(.system(size: 18))
                             .foregroundColor(VoxColors.inkSecondary)
-
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Sobre as cópias")
+                            Text("Guarde o código de recuperação")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(VoxColors.ink)
-                            Text("Esta versão não cria arquivos de backup e não lê destinos no app Arquivos.")
+                            Text("O arquivo contém envelopes de chaves. Quem tiver o arquivo e o código de recuperação poderá restaurar seu conteúdo.")
                                 .font(.system(size: 13))
                                 .foregroundColor(VoxColors.inkSecondary)
                         }
@@ -57,42 +54,34 @@ public struct BackupView: View {
                     .background(VoxColors.surfaceMuted)
                     .cornerRadius(14)
 
-                    // Ação de Verificação de Backup
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Demonstração de verificação")
+                        Text("Conferir um arquivo")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(VoxColors.ink)
-
-                        VoxButton("Simular verificação de backup", icone: "checkmark.seal", variante: .secondary) {
-                            mostrarFolhaVerificacao = true
+                        VoxButton("Verificar backup", icone: "checkmark.seal", variante: .secondary) {
+                            mostrarVerificacao = true
                         }
                     }
-                    .padding(.top, 8)
 
-                    // Card informativo para Restaurar
                     Button(action: onNavegarParaRestauracao) {
                         HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(VoxColors.brandSoft)
-                                    .frame(width: 40, height: 40)
-                                Image(systemName: "arrow.counterclockwise")
-                                    .foregroundColor(VoxColors.brand)
-                                    .font(.system(size: 18, weight: .semibold))
-                            }
-
+                            Image(systemName: "arrow.counterclockwise")
+                                .foregroundColor(VoxColors.brand)
+                                .font(.system(size: 18, weight: .semibold))
+                                .frame(width: 40, height: 40)
+                                .background(VoxColors.brandSoft)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                             VStack(alignment: .leading, spacing: 2) {
-                            Text("Simular restauração")
+                                Text("Restaurar em um aparelho vazio")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundColor(VoxColors.ink)
-                                Text("O fluxo adiciona apenas itens sintéticos; não abre um arquivo real.")
+                                Text("A restauração não substitui nem mescla um cofre existente.")
                                     .font(.system(size: 13))
                                     .foregroundColor(VoxColors.inkSecondary)
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .foregroundColor(VoxColors.inkSecondary)
-                                .font(.system(size: 12, weight: .semibold))
                         }
                         .padding(16)
                         .background(VoxColors.surface)
@@ -107,251 +96,226 @@ public struct BackupView: View {
             }
             .background(VoxColors.canvas.ignoresSafeArea())
             .navigationTitle("Backup")
-            .sheet(isPresented: $mostrarFolhaVerificacao) {
-                FolhaVerificarBackupView(accessManager: accessManager)
+            .alert("Não foi possível concluir", isPresented: Binding(
+                get: { erro != nil }, set: { if !$0 { erro = nil } }
+            )) {
+                Button("OK", role: .cancel) { erro = nil }
+            } message: {
+                Text(erro ?? "")
             }
-        }
-    }
-
-    // MARK: - Subviews de Estado
-
-    @ViewBuilder
-    private var cardEstadoPrincipal: some View {
-        switch accessManager.estadoBackup {
-        case .nuncaCriado:
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(VoxColors.brandSoft)
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "externaldrive.badge.plus")
-                            .foregroundColor(VoxColors.brand)
-                            .font(.system(size: 18, weight: .semibold))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Nenhuma simulação de backup executada")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(VoxColors.ink)
-                        Text("Os cartões exibidos existem apenas nesta demonstração.")
-                            .font(.system(size: 13))
-                            .foregroundColor(VoxColors.inkSecondary)
-                    }
-                }
-
-                VoxButton(
-                    "Simular criação de backup",
-                    variante: .primary,
-                    isLoading: emProgressoCriacao
-                ) {
-                    criarBackup()
-                }
+            .alert("Backup concluído", isPresented: Binding(
+                get: { mensagem != nil }, set: { if !$0 { mensagem = nil } }
+            )) {
+                Button("OK", role: .cancel) { mensagem = nil }
+            } message: {
+                Text(mensagem ?? "")
             }
-            .padding(18)
-            .background(VoxColors.surface)
-            .cornerRadius(18)
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(VoxColors.border, lineWidth: 1))
-
-        case .atualizado(let data, let contagem):
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(VoxColors.success.opacity(0.12))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "checkmark")
-                            .foregroundColor(VoxColors.success)
-                            .font(.system(size: 18, weight: .bold))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Simulação de backup concluída")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(VoxColors.ink)
-                        Text("Último backup: \(formatarData(data)) · \(contagem) itens")
-                            .font(.system(size: 13))
-                            .foregroundColor(VoxColors.inkSecondary)
-                    }
-                }
-
-                VoxButton("Simular novo backup", variante: .secondary, isLoading: emProgressoCriacao) {
-                    criarBackup()
-                }
+            .sheet(isPresented: $mostrarVerificacao) {
+                VerificarBackupView(accessManager: accessManager)
             }
-            .padding(18)
-            .background(VoxColors.surface)
-            .cornerRadius(18)
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(VoxColors.border, lineWidth: 1))
-
-        case .desatualizado(let dataUltimo, let pendentes):
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(VoxColors.warning.opacity(0.14))
-                            .frame(width: 40, height: 40)
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .foregroundColor(VoxColors.warning)
-                            .font(.system(size: 18, weight: .bold))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Simulação desatualizada")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(VoxColors.ink)
-                        Text("Há \(pendentes) item(ns) ainda não incluídos.")
-                            .font(.system(size: 13))
-                            .foregroundColor(VoxColors.inkSecondary)
-                        if let ultimo = dataUltimo {
-                            Text("Último backup: \(formatarData(ultimo))")
-                                .font(.system(size: 12))
-                                .foregroundColor(VoxColors.inkSecondary)
+            .sheet(isPresented: $mostrarSeletorExportacao) {
+                if let preparado {
+                    BackupPackageDocumentPicker(exporting: preparado.url) { copiado in
+                        mostrarSeletorExportacao = false
+                        guard copiado else {
+                            accessManager.cancelarBackup(id: preparado.id)
+                            self.preparado = nil
+                            return
+                        }
+                        Task {
+                            do {
+                                try await accessManager.confirmarBackupExportado(id: preparado.id)
+                                mensagem = "O arquivo de backup foi copiado para o destino escolhido. Guarde também o código de recuperação."
+                            } catch {
+                                erro = error.localizedDescription
+                            }
+                            self.preparado = nil
                         }
                     }
-                }
-
-                VoxButton("Simular novo backup", variante: .primary, isLoading: emProgressoCriacao) {
-                    criarBackup()
+                    .ignoresSafeArea()
                 }
             }
-            .padding(18)
-            .background(VoxColors.surface)
-            .cornerRadius(18)
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(VoxColors.border, lineWidth: 1))
+            .onChange(of: accessManager.estadoAcesso) { _, state in
+                if state != .desbloqueado, let preparado {
+                    accessManager.cancelarBackup(id: preparado.id)
+                    self.preparado = nil
+                    mostrarSeletorExportacao = false
+                }
+            }
+            .onDisappear {
+                tarefaPreparacao?.cancel()
+                if let preparado { accessManager.cancelarBackup(id: preparado.id) }
+            }
         }
     }
 
-    private func criarBackup() {
-        emProgressoCriacao = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            _ = try? accessManager.criarBackup()
-            emProgressoCriacao = false
+    private var estadoDoBackup: some View {
+        let (title, detail, icon, tint) = backupStatusPresentation
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(tint)
+                    .frame(width: 40, height: 40)
+                    .background(tint.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 16, weight: .semibold)).foregroundColor(VoxColors.ink)
+                    Text(detail).font(.system(size: 13)).foregroundColor(VoxColors.inkSecondary)
+                }
+            }
+            VoxButton(
+                accessManager.estadoBackup == .nuncaCriado ? "Criar backup cifrado" : "Exportar nova cópia",
+                icone: "externaldrive",
+                variante: accessManager.estadoBackup == .nuncaCriado ? .primary : .secondary,
+                isLoading: preparando
+            ) {
+                iniciarCriacaoBackup()
+            }
+            if preparando {
+                HStack {
+                    Text("Preparando e verificando os dados cifrados…")
+                        .font(.system(size: 13))
+                        .foregroundColor(VoxColors.inkSecondary)
+                    Spacer()
+                    Button("Cancelar") { tarefaPreparacao?.cancel() }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(VoxColors.danger)
+                }
+            }
+        }
+        .padding(18)
+        .background(VoxColors.surface)
+        .cornerRadius(18)
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(VoxColors.border, lineWidth: 1))
+    }
+
+    private var backupStatusPresentation: (String, String, String, Color) {
+        switch accessManager.estadoBackup {
+        case .nuncaCriado:
+            return ("Nenhum backup exportado", "Crie um pacote cifrado e escolha um destino no app Arquivos.", "externaldrive.badge.plus", VoxColors.brand)
+        case .atualizado(let date, let count):
+            return ("Backup atualizado", "Última cópia confirmada: \(date.formatted(date: .abbreviated, time: .shortened)) · \(count) itens.", "checkmark.circle.fill", VoxColors.success)
+        case .desatualizado(let date, let pending):
+            let detail = date.map { "Há \(pending) alteração(ões) desde a cópia de \($0.formatted(date: .abbreviated, time: .shortened))." }
+                ?? "Há \(pending) alteração(ões) sem cópia exportada."
+            return ("Backup desatualizado", detail, "arrow.triangle.2.circlepath", VoxColors.warning)
         }
     }
 
-    private func formatarData(_ data: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "pt_BR")
-        f.dateFormat = "d 'de' MMM, HH:mm"
-        return f.string(from: data)
+    @MainActor
+    private func iniciarCriacaoBackup() {
+        guard !preparando else { return }
+        preparando = true
+        tarefaPreparacao = Task { @MainActor in
+            defer { preparando = false; tarefaPreparacao = nil }
+            do {
+                let result = try await accessManager.prepararBackup()
+                if Task.isCancelled {
+                    accessManager.cancelarBackup(id: result.id)
+                    return
+                }
+                preparado = result
+                mostrarSeletorExportacao = true
+            } catch {
+                if !Task.isCancelled { erro = error.localizedDescription }
+            }
+        }
     }
+
 }
 
-/// Folha para demonstrar e testar a verificação de integridade de um arquivo de backup.
-struct FolhaVerificarBackupView: View {
+private struct VerificarBackupView: View {
     @ObservedObject var accessManager: VaultAccessManager
     @Environment(\.dismiss) private var dismiss
-
-    @State private var modoSimulacao: ModoSimulacaoBackup = .integro
-    @State private var resultado: ResultadoVerificacaoBackup?
+    @State private var mostrarSeletor = false
+    @State private var urlBackup: URL?
+    @State private var codigoRecuperacao = ""
+    @State private var resumo: ResumoBackup?
+    @State private var erro: String?
+    @State private var verificando = false
+    @State private var tarefaVerificacao: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                VoxPrototypeDisclosureView()
-
-                Text("Simular verificação de backup")
-                    .font(.system(size: 22, weight: .bold))
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Verificar backup")
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(VoxColors.ink)
-
-                Text("Escolha um cenário fictício. Esta tela não seleciona nem verifica arquivos.")
-                    .font(.system(size: 14))
+                Text("A verificação autentica o manifesto, o índice e todos os blocos dos itens. Ela não altera o cofre atual nem o arquivo escolhido.")
+                    .font(.system(size: 15))
                     .foregroundColor(VoxColors.inkSecondary)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Cenário demonstrativo:")
-                        .font(.system(size: 13, weight: .semibold))
+                VoxButton(urlBackup == nil ? "Escolher arquivo .voxbackup" : "Escolher outro arquivo", icone: "folder", variante: .secondary) {
+                    mostrarSeletor = true
+                }
+                if let urlBackup {
+                    Label(urlBackup.lastPathComponent, systemImage: "doc.zipper")
+                        .font(.system(size: 13))
                         .foregroundColor(VoxColors.inkSecondary)
-
-                    Picker("Modo de teste", selection: $modoSimulacao) {
-                        Text("Exemplo íntegro").tag(ModoSimulacaoBackup.integro)
-                        Text("Exemplo alterado").tag(ModoSimulacaoBackup.adulterado)
-                        Text("Formato Incompatível").tag(ModoSimulacaoBackup.versaoIncompativel)
-                    }
-                    .pickerStyle(.segmented)
-                }
-                .padding()
-                .background(VoxColors.surfaceMuted)
-                .cornerRadius(14)
-
-                VoxButton("Exibir resultado demonstrativo", variante: .primary) {
-                    resultado = accessManager.verificarBackup(modo: modoSimulacao)
+                        .lineLimit(2)
                 }
 
-                if let res = resultado {
-                    exibirResultado(res)
+                SecureField("Código de recuperação", text: $codigoRecuperacao)
+                    .textContentType(.oneTimeCode)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.characters)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(14)
+                    .background(VoxColors.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(VoxColors.border, lineWidth: 1))
+
+                VoxButton("Verificar integridade", icone: "checkmark.seal", isLoading: verificando) {
+                    iniciarVerificacao()
+                }
+                .disabled(urlBackup == nil || codigoRecuperacao.isEmpty || verificando)
+                if verificando {
+                    Button("Cancelar verificação") { tarefaVerificacao?.cancel() }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(VoxColors.danger)
                 }
 
+                if let resumo {
+                    Label("Backup legível", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(VoxColors.success)
+                    Text("Criado em \(resumo.dataCriacao.formatted(date: .abbreviated, time: .shortened)) · \(resumo.contagemItens) itens · \(ByteCountFormatter.string(fromByteCount: resumo.tamanhoBytes, countStyle: .file))")
+                        .font(.system(size: 14))
+                        .foregroundColor(VoxColors.inkSecondary)
+                }
+                if let erro {
+                    Text(erro).font(.system(size: 14)).foregroundColor(VoxColors.danger)
+                }
                 Spacer()
             }
             .padding(24)
             .background(VoxColors.canvas.ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Fechar") { dismiss() }
-                        .foregroundColor(VoxColors.brand)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Fechar") { dismiss() } } }
+            .fileImporter(isPresented: $mostrarSeletor, allowedContentTypes: [VoxBackupFileType.package]) { result in
+                switch result {
+                case .success(let url): urlBackup = url; resumo = nil; erro = nil
+                case .failure(let error): erro = error.localizedDescription
                 }
             }
+            .onDisappear { tarefaVerificacao?.cancel() }
         }
     }
 
-    @ViewBuilder
-    private func exibirResultado(_ res: ResultadoVerificacaoBackup) -> some View {
-        switch res {
-        case .legivel(let data, let contagem):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(VoxColors.success)
-                    Text("Exemplo marcado como legível")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(VoxColors.ink)
-                }
-                Text("\(contagem) itens sintéticos no estado demonstrativo desde \(data.formatted(date: .abbreviated, time: .shortened)).")
-                    .font(.system(size: 13))
-                    .foregroundColor(VoxColors.inkSecondary)
-                Text("Nenhum arquivo foi aberto ou validado.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(VoxColors.inkSecondary)
+    @MainActor
+    private func iniciarVerificacao() {
+        guard let urlBackup, !verificando else { return }
+        verificando = true
+        resumo = nil
+        erro = nil
+        tarefaVerificacao = Task { @MainActor in
+            defer { verificando = false; tarefaVerificacao = nil }
+            do {
+                resumo = try await accessManager.verificarBackup(em: urlBackup, codigoRecuperacao: codigoRecuperacao)
+            } catch {
+                if !Task.isCancelled { self.erro = error.localizedDescription }
             }
-            .padding(14)
-            .background(VoxColors.success.opacity(0.1))
-            .cornerRadius(14)
-
-        case .impossivelVerificar(let motivo):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(VoxColors.danger)
-                    Text("Cenário demonstrativo inválido")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(VoxColors.ink)
-                }
-                Text(motivo)
-                    .font(.system(size: 13))
-                    .foregroundColor(VoxColors.inkSecondary)
-                Text("Nenhum arquivo real foi lido ou alterado.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(VoxColors.inkSecondary)
-            }
-            .padding(14)
-            .background(VoxColors.danger.opacity(0.1))
-            .cornerRadius(14)
-
-        case .formatoIncompativel(let versao):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(VoxColors.warning)
-                    Text("Cenário de formato incompatível")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(VoxColors.ink)
-                }
-                Text("O exemplo usa o rótulo de versão \(versao). Nenhum backup real foi lido.")
-                    .font(.system(size: 13))
-                    .foregroundColor(VoxColors.inkSecondary)
-            }
-            .padding(14)
-            .background(VoxColors.warning.opacity(0.12))
-            .cornerRadius(14)
         }
     }
 }

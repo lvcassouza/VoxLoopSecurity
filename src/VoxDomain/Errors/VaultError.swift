@@ -17,11 +17,11 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
     case intervaloDeLeituraInvalido
     case exportacaoTemporariaJaExiste
     case falhaNaExportacao
+    case falhaNoBackup
     case falhaNaLimpezaDaExclusao
     case formatoDeMidiaNaoSuportado
     case formatoCofreIncompativel
     case cofreBloqueado
-    case restauracaoIndisponivelNestaVersao
 
     public var errorDescription: String? {
         switch self {
@@ -55,6 +55,8 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
             return "Não foi possível preparar o arquivo para exportação."
         case .falhaNaExportacao:
             return "Não foi possível concluir a exportação."
+        case .falhaNoBackup:
+            return "Não foi possível preparar ou verificar este backup."
         case .falhaNaLimpezaDaExclusao:
             return "O item foi removido do cofre, mas um arquivo cifrado residual não pôde ser limpo agora. Bloqueie e abra o cofre novamente para tentar a limpeza."
         case .formatoDeMidiaNaoSuportado:
@@ -63,8 +65,6 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
             return "O formato deste cofre não é compatível com esta versão do Vox."
         case .cofreBloqueado:
             return "Desbloqueie o cofre antes de continuar."
-        case .restauracaoIndisponivelNestaVersao:
-            return "A restauração de arquivos de backup ainda não está disponível nesta versão."
         }
     }
 }

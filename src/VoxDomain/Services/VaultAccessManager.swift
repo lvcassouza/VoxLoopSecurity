@@ -23,9 +23,15 @@ public final class VaultAccessManager: ObservableObject {
     private var sessionEpoch: UInt64 = 0
     private var mediaReadSessions: [UUID: VaultMediaReadSession] = [:]
     private var exportDirectories: [UUID: URL] = [:]
+    private var backupDirectories: [UUID: BackupPreparado] = [:]
+    private var pendingRestoreID: UUID?
 
     private static var exportStagingDirectory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("VoxExportStaging", isDirectory: true)
+    }
+
+    private static var backupStagingDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("VoxBackupStaging", isDirectory: true)
     }
 
     public static func diretorioDoCofrePadrao() -> URL {
@@ -44,6 +50,8 @@ public final class VaultAccessManager: ObservableObject {
         self.isConfigurado = exists
         self.estadoAcesso = exists ? .bloqueado : .naoConfigurado
         Self.limparExportacoesAbandonadas()
+        Self.limparBackupsAbandonados()
+        Self.limparRestauracoesAbandonadas(aoLadoDe: directory)
         // Keep the source-compatible arguments, but never trust caller-supplied access state.
         _ = configuradoInicial
         self.itens = exists ? [] : itensIniciais
@@ -108,7 +116,7 @@ public final class VaultAccessManager: ObservableObject {
             estadoAcesso = .desbloqueado
             tentativasFalhas = 0
             erroAcesso = nil
-            updateBackupStateAfterUnlock()
+            await updateBackupStateAfterUnlock()
             SanitizedLogger.shared.log(.cofreDesbloqueado(metodo: "credencial"))
             return true
         } catch {
@@ -139,7 +147,16 @@ public final class VaultAccessManager: ObservableObject {
 
     public func aplicarCortinaPrivacidade(ativa: Bool) {
         cortinaPrivacidadeAtiva = ativa
-        if ativa && isConfigurado { bloquearCofre() }
+        if ativa {
+            if isConfigurado { bloquearCofre() }
+            else {
+                sessionEpoch &+= 1
+                if let pendingRestoreID {
+                    self.pendingRestoreID = nil
+                    Task { await store.cancelRestore(id: pendingRestoreID) }
+                }
+            }
+        }
     }
 
     // MARK: - Recovery
@@ -175,6 +192,7 @@ public final class VaultAccessManager: ObservableObject {
 
     public func apagarCofreInacessivel() async {
         invalidarConteudoTransitório()
+        pendingRestoreID = nil
         try? await store.eraseVault()
         itens.removeAll(keepingCapacity: false)
         isConfigurado = false
@@ -206,7 +224,7 @@ public final class VaultAccessManager: ObservableObject {
             throw VaultError.cofreBloqueado
         }
         itens.append(item)
-        atualizarEstadoBackupAposModificacao()
+        await atualizarEstadoBackupAposModificacao()
         SanitizedLogger.shared.log(.importacaoLocalConcluida)
         return item
     }
@@ -249,7 +267,7 @@ public final class VaultAccessManager: ObservableObject {
             }
             itens.append(item)
         }
-        atualizarEstadoBackupAposModificacao()
+        await atualizarEstadoBackupAposModificacao()
         SanitizedLogger.shared.log(.importacaoSinteticaConcluida(quantidade: quantidade))
         return quantidade
     }
@@ -333,9 +351,9 @@ public final class VaultAccessManager: ObservableObject {
         guard estadoAcesso == .desbloqueado else { throw VaultError.cofreBloqueado }
         do {
             try await store.deleteItem(id: id)
-            atualizarEstadoAposExclusao(id: id)
+            await atualizarEstadoAposExclusao(id: id)
         } catch let error as VaultError where error == .falhaNaLimpezaDaExclusao {
-            atualizarEstadoAposExclusao(id: id)
+            await atualizarEstadoAposExclusao(id: id)
             throw error
         }
     }
@@ -345,9 +363,9 @@ public final class VaultAccessManager: ObservableObject {
         if let index = itens.firstIndex(where: { $0.id == id }) { itens[index].status = .adulterado }
     }
 
-    private func atualizarEstadoAposExclusao(id: UUID) {
+    private func atualizarEstadoAposExclusao(id: UUID) async {
         itens.removeAll { $0.id == id }
-        atualizarEstadoBackupAposModificacao()
+        await atualizarEstadoBackupAposModificacao()
         SanitizedLogger.shared.log(.itemLocalExcluido)
     }
 
@@ -356,6 +374,8 @@ public final class VaultAccessManager: ObservableObject {
         mediaReadSessions.removeAll(keepingCapacity: false)
         let batches = Array(exportDirectories.keys)
         for batch in batches { concluirExportacao(id: batch) }
+        let backups = Array(backupDirectories.keys)
+        for backup in backups { cancelarBackup(id: backup) }
     }
 
     private static func limparExportacoesAbandonadas() {
@@ -401,60 +421,152 @@ public final class VaultAccessManager: ObservableObject {
         return VaultError.falhaNaExportacao
     }
 
-    // MARK: - Explicitly demonstrative backup flows
+    // MARK: - Encrypted backup and restore
 
-    public func criarBackup() throws -> Date {
-        let now = Date()
-        ultimoBackupData = now
-        for index in itens.indices where itens[index].status == .pendenteBackup {
-            itens[index].status = .integro
-        }
-        estadoBackup = .atualizado(data: now, contagemItens: itens.count)
-        SanitizedLogger.shared.log(.backupSimulado(contagem: itens.count))
-        return now
-    }
-
-    public func verificarBackup(modo: ModoSimulacaoBackup = .integro) -> ResultadoVerificacaoBackup {
-        switch modo {
-        case .integro:
-            let date = ultimoBackupData ?? Date()
-            SanitizedLogger.shared.log(.verificacaoBackupSimulada(valido: true))
-            return .legivel(data: date, contagemItens: itens.count)
-        case .adulterado:
-            SanitizedLogger.shared.log(.verificacaoBackupSimulada(valido: false))
-            return .impossivelVerificar(motivo: "Este cenário simula dados alterados; nenhum arquivo foi verificado.")
-        case .versaoIncompativel:
-            SanitizedLogger.shared.log(.verificacaoBackupSimulada(valido: false))
-            return .formatoIncompativel(versaoEncontrada: "EXEMPLO-v9.9")
+    public func prepararBackup() async throws -> BackupPreparado {
+        guard estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else { throw VaultError.cofreBloqueado }
+        let epoch = sessionEpoch
+        do {
+            try FileManager.default.createDirectory(at: Self.backupStagingDirectory, withIntermediateDirectories: true)
+            let prepared = try await store.prepareBackup(stagingRoot: Self.backupStagingDirectory)
+            guard epoch == sessionEpoch, estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else {
+                try? FileManager.default.removeItem(at: prepared.url)
+                throw VaultError.cofreBloqueado
+            }
+            backupDirectories[prepared.id] = prepared
+            return prepared
+        } catch {
+            throw Self.erroDeBackup(error)
         }
     }
 
-    public func restaurarDeBackup(itensRestaurados: [ItemDoCofre], credencial: String, confirmacao: String) throws {
-        _ = itensRestaurados
-        _ = credencial
-        _ = confirmacao
-        throw VaultError.restauracaoIndisponivelNestaVersao
+    /// Call only after the native document picker confirms that it copied the package.
+    public func confirmarBackupExportado(id: UUID) async throws {
+        guard let prepared = backupDirectories[id] else { throw VaultError.falhaNoBackup }
+        guard estadoAcesso == .desbloqueado, !cortinaPrivacidadeAtiva else {
+            cancelarBackup(id: id)
+            throw VaultError.cofreBloqueado
+        }
+        do {
+            try await store.confirmBackupExported(
+                revision: prepared.resumo.revisaoConteudo,
+                date: prepared.resumo.dataCriacao,
+                itemCount: prepared.resumo.contagemItens
+            )
+            backupDirectories.removeValue(forKey: id)
+            try? FileManager.default.removeItem(at: prepared.url)
+            await atualizarEstadoBackupPersistido()
+            SanitizedLogger.shared.log(.backupExportado)
+        } catch {
+            cancelarBackup(id: id)
+            throw Self.erroDeBackup(error)
+        }
+    }
+
+    public func cancelarBackup(id: UUID) {
+        guard let prepared = backupDirectories.removeValue(forKey: id) else { return }
+        try? FileManager.default.removeItem(at: prepared.url)
+    }
+
+    public func verificarBackup(em url: URL, codigoRecuperacao: String) async throws -> ResumoBackup {
+        let summary = try await store.verifyBackup(at: url, recoveryCode: codigoRecuperacao)
+        SanitizedLogger.shared.log(.verificacaoBackupConcluida(valido: true))
+        return summary
+    }
+
+    public func prepararRestauracao(
+        de url: URL,
+        codigoRecuperacao: String,
+        novaCredencial: String,
+        confirmacao: String
+    ) async throws -> RestauracaoPreparada {
+        guard !isConfigurado, estadoAcesso == .naoConfigurado, !cortinaPrivacidadeAtiva else {
+            throw VaultError.cofreNaoVazioParaRestauracao
+        }
+        let epoch = sessionEpoch
+        let prepared = try await store.prepareRestore(
+            from: url,
+            recoveryCode: codigoRecuperacao,
+            newPassphrase: novaCredencial,
+            confirmation: confirmacao
+        )
+        guard epoch == sessionEpoch, estadoAcesso == .naoConfigurado, !cortinaPrivacidadeAtiva else {
+            await store.cancelRestore(id: prepared.id)
+            throw VaultError.operacaoInterrompida
+        }
+        pendingRestoreID = prepared.id
+        return prepared
+    }
+
+    public func confirmarNovoCodigoRecuperacao(id: UUID, trechoDigitado: String) async throws {
+        guard pendingRestoreID == id, !isConfigurado, estadoAcesso == .naoConfigurado else {
+            throw VaultError.operacaoInterrompida
+        }
+        let restoredItems = try await store.confirmRestore(id: id, recoveryCodeConfirmation: trechoDigitado)
+        pendingRestoreID = nil
+        isConfigurado = true
+        if cortinaPrivacidadeAtiva {
+            itens.removeAll(keepingCapacity: false)
+            estadoAcesso = .bloqueado
+            await store.lock()
+        } else {
+            itens = restoredItems
+            estadoAcesso = .desbloqueado
+        }
+        tentativasFalhas = 0
+        erroAcesso = nil
+        if estadoAcesso == .desbloqueado { await atualizarEstadoBackupPersistido() }
+        SanitizedLogger.shared.log(.cofreDesbloqueado(metodo: "restauracao"))
+    }
+
+    public func cancelarRestauracao(id: UUID) async {
+        guard pendingRestoreID == id else { return }
+        pendingRestoreID = nil
+        await store.cancelRestore(id: id)
     }
 
     // MARK: - State helpers
 
-    private func updateBackupStateAfterUnlock() {
-        if !itens.isEmpty {
-            estadoBackup = .desatualizado(dataUltimo: nil, itensPendentes: itens.count)
-        } else {
-            estadoBackup = .nuncaCriado
+    private func updateBackupStateAfterUnlock() async {
+        await atualizarEstadoBackupPersistido()
+    }
+
+    private func atualizarEstadoBackupAposModificacao() async {
+        await atualizarEstadoBackupPersistido()
+    }
+
+    private func atualizarEstadoBackupPersistido() async {
+        estadoBackup = await store.backupState()
+        switch estadoBackup {
+        case .atualizado(let date, _): ultimoBackupData = date
+        case .desatualizado(let date, _): ultimoBackupData = date
+        case .nuncaCriado: ultimoBackupData = nil
         }
     }
 
-    private func atualizarEstadoBackupAposModificacao() {
-        let pending = itens.filter { $0.status == .pendenteBackup }.count
-        if pending > 0 {
-            estadoBackup = .desatualizado(dataUltimo: ultimoBackupData, itensPendentes: pending)
-        } else if let latest = ultimoBackupData {
-            estadoBackup = .atualizado(data: latest, contagemItens: itens.count)
-        } else {
-            estadoBackup = itens.isEmpty ? .nuncaCriado : .desatualizado(dataUltimo: nil, itensPendentes: itens.count)
+    private static func limparBackupsAbandonados() {
+        try? FileManager.default.removeItem(at: backupStagingDirectory)
+    }
+
+    private static func limparRestauracoesAbandonadas(aoLadoDe vaultURL: URL) {
+        let parent = vaultURL.deletingLastPathComponent()
+        guard let candidates = try? FileManager.default.contentsOfDirectory(
+            at: parent,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return }
+        for candidate in candidates where candidate.lastPathComponent.hasPrefix(".vox-restore-") {
+            try? FileManager.default.removeItem(at: candidate)
         }
+    }
+
+    private static func erroDeBackup(_ error: Error) -> VaultError {
+        if let error = error as? VaultError { return error }
+        let nsError = error as NSError
+        if nsError.code == NSFileWriteOutOfSpaceError ||
+            (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOSPC)) {
+            return .espacoInsuficiente
+        }
+        return .falhaNoBackup
     }
 
     private static func normalizeRecoveryCode(_ value: String) -> String {

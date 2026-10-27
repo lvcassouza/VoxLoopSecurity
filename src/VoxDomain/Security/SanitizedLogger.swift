@@ -20,9 +20,8 @@ public final class SanitizedLogger: Sendable {
         case importacaoFalhou(erro: String)
         case exclusaoConcluida
         case itemLocalExcluido
-        case backupSimulado(contagem: Int)
-        case verificacaoBackupSimulada(valido: Bool)
-        case restauracaoSimulada(contagem: Int)
+        case backupExportado
+        case verificacaoBackupConcluida(valido: Bool)
         case cofreResetado
     }
 
@@ -48,12 +47,10 @@ public final class SanitizedLogger: Sendable {
             logger.info("Item sintético removido da demonstração.")
         case .itemLocalExcluido:
             logger.info("Uma cópia local foi removida do cofre.")
-        case .backupSimulado(contagem: _):
-            logger.info("Estado sintético de backup atualizado; nenhum arquivo foi criado.")
-        case .verificacaoBackupSimulada(let valido):
+        case .backupExportado:
+            logger.info("Cópia de backup cifrado exportada pelo seletor de arquivos.")
+        case .verificacaoBackupConcluida(let valido):
             logger.info("Verificação de backup executada: resultado=\(valido).")
-        case .restauracaoSimulada(contagem: _):
-            logger.info("Itens sintéticos adicionados pelo fluxo demonstrativo de restauração.")
         case .cofreResetado:
             logger.notice("Cofre inacessível foi resetado para estado vazio.")
         }
