@@ -77,7 +77,7 @@ actor VaultFileStore {
     private var journalURL: URL { rootURL.appendingPathComponent("transaction.journal") }
     private var itemsURL: URL { rootURL.appendingPathComponent("items", isDirectory: true) }
     private var stagingURL: URL { rootURL.appendingPathComponent("staging", isDirectory: true) }
-    private let chunkSize = 1_048_576
+    private let chunkSize = VaultChunkFormat.chunkSize
 
     init(rootURL: URL) {
         self.rootURL = rootURL
@@ -275,7 +275,26 @@ actor VaultFileStore {
         let record = updated.remove(at: index)
         try writeIndex(updated, key: key, to: indexURL)
         records = updated
-        try? FileManager.default.removeItem(at: itemURL(for: record))
+        do {
+            try FileManager.default.removeItem(at: itemURL(for: record))
+        } catch {
+            // The catalog commit is authoritative; unlock-time orphan cleanup can retry.
+            throw VaultError.falhaNaLimpezaDaExclusao
+        }
+    }
+
+    func makeMediaReadSession(id: UUID) throws -> VaultMediaReadSession {
+        guard let key = vaultKey else { throw VaultError.cofreBloqueado }
+        guard let record = records.first(where: { $0.id == id }) else { throw VaultError.itemNaoEncontrado }
+        var dataKey = try VaultCrypto.open(record.wrappedDataKey, key: key, authenticating: Self.itemKeyAAD(record.id))
+        defer { dataKey.resetBytes(in: 0..<dataKey.count) }
+        return try VaultMediaReadSession(
+            encryptedURL: itemURL(for: record),
+            item: record.item,
+            noncePrefix: record.noncePrefix,
+            chunkCount: record.chunkCount,
+            dataKey: dataKey
+        )
     }
 
     func eraseVault() throws {
@@ -385,9 +404,9 @@ actor VaultFileStore {
             }
             let ciphertext = authenticatedBytes.prefix(Int(length))
             let tag = authenticatedBytes.suffix(16)
-            let nonce = Self.chunkNonce(prefix: record.noncePrefix, counter: counter)
+            let nonce = VaultChunkFormat.nonce(prefix: record.noncePrefix, counter: counter)
             let box = VaultCrypto.SealedValue(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
-            let plaintext = try VaultCrypto.open(box, key: key, authenticating: Self.chunkAAD(id: record.id, counter: counter, length: length))
+            let plaintext = try VaultCrypto.open(box, key: key, authenticating: VaultChunkFormat.aad(id: record.id, counter: counter, length: length))
             guard plaintext.count == Int(length) else { throw VaultError.dadoAdulterado }
             total += Int64(plaintext.count)
             counter += 1
@@ -397,12 +416,12 @@ actor VaultFileStore {
 
     private func writeChunk(_ bytes: Data, counter: UInt64, noncePrefix: UInt32, id: UUID, key: Data, to output: FileHandle) throws {
         let length = UInt32(bytes.count)
-        let nonceData = Self.chunkNonce(prefix: noncePrefix, counter: counter)
+        let nonceData = VaultChunkFormat.nonce(prefix: noncePrefix, counter: counter)
         let sealed = try VaultCrypto.sealWithNonce(
             bytes,
             key: key,
             nonce: nonceData,
-            authenticating: Self.chunkAAD(id: id, counter: counter, length: length)
+            authenticating: VaultChunkFormat.aad(id: id, counter: counter, length: length)
         )
         var header = length.bigEndian
         let headerData = withUnsafeBytes(of: &header) { Data($0) }
@@ -458,22 +477,6 @@ actor VaultFileStore {
     }
 
     private static func itemKeyAAD(_ id: UUID) -> Data { Data("vox.item.key.v1.\(id.uuidString)".utf8) }
-
-    private static func chunkNonce(prefix: UInt32, counter: UInt64) -> Data {
-        var prefix = prefix.bigEndian
-        var counter = counter.bigEndian
-        return withUnsafeBytes(of: &prefix) { p in
-            withUnsafeBytes(of: &counter) { c in Data(p) + Data(c) }
-        }
-    }
-
-    private static func chunkAAD(id: UUID, counter: UInt64, length: UInt32) -> Data {
-        var counter = counter.bigEndian
-        var length = length.bigEndian
-        return Data("vox.chunk.v1.\(id.uuidString)".utf8)
-            + withUnsafeBytes(of: &counter) { Data($0) }
-            + withUnsafeBytes(of: &length) { Data($0) }
-    }
 
     private static func normalizeRecoveryCode(_ code: String) -> String {
         code.uppercased().filter(\.isHexDigit)

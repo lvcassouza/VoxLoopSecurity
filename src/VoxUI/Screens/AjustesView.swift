@@ -85,7 +85,7 @@ public struct AjustesView: View {
                         Text("Arquivos reais")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(VoxColors.ink)
-                        Text("A seleção lê apenas os itens escolhidos e grava uma cópia cifrada. O original permanece na Fototeca. Exportação e backup real ainda não estão disponíveis.")
+                        Text("A seleção lê apenas os itens escolhidos e grava uma cópia cifrada. O arquivo de origem permanece na Fototeca. A exportação cria uma cópia externa; backup real ainda não está disponível.")
                             .font(.system(size: 12))
                             .foregroundColor(VoxColors.inkSecondary)
                     }

@@ -1,6 +1,10 @@
 import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import VoxDomain
+@testable import VoxUI
 
 @MainActor
 final class VaultAccessManagerTests: XCTestCase {
@@ -58,6 +62,33 @@ final class VaultAccessManagerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), sourceBytes, "Import must preserve the source file")
         XCTAssertEqual(manager.itens, [item])
 
+        let readSession = try await manager.abrirSessaoDeLeitura(id: item.id)
+        var recoveredBytes = Data()
+        var readOffset: Int64 = 0
+        let chunkSize: Int64 = 1_048_576
+        while readOffset < Int64(sourceBytes.count) {
+            let end = min(Int64(sourceBytes.count), readOffset + chunkSize)
+            recoveredBytes.append(try readSession.read(range: readOffset..<end))
+            readOffset = end
+        }
+        XCTAssertEqual(recoveredBytes, sourceBytes, "Authenticated bounded reads must reproduce the source bytes")
+
+        let boundaryRange = Int64(chunkSize - 7)..<Int64(chunkSize + 11)
+        XCTAssertEqual(
+            try readSession.read(range: boundaryRange),
+            Data(sourceBytes[Int(boundaryRange.lowerBound)..<Int(boundaryRange.upperBound)]),
+            "A range crossing a chunk boundary must authenticate and reproduce both pieces"
+        )
+        let finalRange = Int64(sourceBytes.count - 97)..<Int64(sourceBytes.count)
+        XCTAssertEqual(
+            try readSession.read(range: finalRange),
+            Data(sourceBytes[Int(finalRange.lowerBound)..<Int(finalRange.upperBound)]),
+            "The final partial chunk must be readable"
+        )
+        XCTAssertThrowsError(try readSession.read(range: Int64(sourceBytes.count)..<Int64(sourceBytes.count + 1))) {
+            XCTAssertEqual($0 as? VaultError, .intervaloDeLeituraInvalido)
+        }
+
         let encryptedFiles = try FileManager.default.contentsOfDirectory(
             at: vaultDirectory.appendingPathComponent("items"),
             includingPropertiesForKeys: nil
@@ -74,6 +105,9 @@ final class VaultAccessManagerTests: XCTestCase {
 
         manager.bloquearCofre()
         XCTAssertTrue(manager.itens.isEmpty, "Metadata must be removed from the visible locked state")
+        XCTAssertThrowsError(try readSession.read(range: 0..<1)) {
+            XCTAssertEqual($0 as? VaultError, .cofreBloqueado)
+        }
 
         let relaunched = VaultAccessManager(storageDirectory: vaultDirectory)
         XCTAssertEqual(relaunched.estadoAcesso, .bloqueado)
@@ -189,9 +223,19 @@ final class VaultAccessManagerTests: XCTestCase {
         let bytes = Data("synthetic photo fixture".utf8)
         try bytes.write(to: source)
         let item = try await manager.importarArquivo(em: source, nome: "synthetic_photo.jpg", tipo: .foto)
-        XCTAssertThrowsError(try manager.exportarItem(id: item.id)) { error in
-            XCTAssertEqual(error as? VaultError, .exportacaoIndisponivelNestaVersao)
+        let readSession = try await manager.abrirSessaoDeLeitura(id: item.id)
+        XCTAssertEqual(try readSession.read(range: 0..<Int64(bytes.count)), bytes)
+        manager.fecharSessaoDeLeitura(id: readSession.sessionID)
+        XCTAssertThrowsError(try readSession.read(range: 0..<1)) {
+            XCTAssertEqual($0 as? VaultError, .cofreBloqueado)
         }
+
+        let exportBatch = try await manager.prepararExportacao(ids: [item.id])
+        let export = try XCTUnwrap(exportBatch.arquivos.first)
+        XCTAssertEqual(try Data(contentsOf: export.url), bytes)
+        XCTAssertEqual(export.nomeArquivo, "synthetic_photo.jpg")
+        manager.concluirExportacao(id: exportBatch.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: export.url.path), "The prepared plaintext copy must be removed after export completes")
 
         do {
             _ = try await manager.importarItensSinteticos(quantidade: 2, tipo: .foto, simularEspacoInsuficiente: true)
@@ -208,6 +252,117 @@ final class VaultAccessManagerTests: XCTestCase {
         let reopened = await relaunched.desbloquearComCredencial(passphrase)
         XCTAssertTrue(reopened)
         XCTAssertTrue(relaunched.itens.isEmpty)
+    }
+
+    func testRangeReadAndExportFailClosedWhenCiphertextChangesAfterUnlock() async throws {
+        let passphrase = "CredencialDeTesteLeituraAutenticada123"
+        _ = try await configureVault(passphrase)
+        let fixture = Data("synthetic authenticated fixture".utf8)
+        let source = FileManager.default.temporaryDirectory.appendingPathComponent("VoxTamper-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try fixture.write(to: source)
+        let item = try await manager.importarArquivo(em: source, nome: "synthetic_tamper.jpg", tipo: .foto)
+        let session = try await manager.abrirSessaoDeLeitura(id: item.id)
+
+        let itemURL = vaultDirectory
+            .appendingPathComponent("items", isDirectory: true)
+            .appendingPathComponent("\(item.id.uuidString).enc")
+        let encrypted = try Data(contentsOf: itemURL)
+        let lastByteOffset = UInt64(encrypted.count - 1)
+        let tamperedByte = (encrypted.last ?? 0) ^ 0x01
+        let tamperHandle = try FileHandle(forWritingTo: itemURL)
+        try tamperHandle.seek(toOffset: lastByteOffset)
+        try tamperHandle.write(contentsOf: Data([tamperedByte]))
+        try tamperHandle.close()
+
+        XCTAssertThrowsError(try session.read(range: 0..<Int64(fixture.count))) {
+            XCTAssertEqual($0 as? VaultError, .dadoAdulterado)
+        }
+        do {
+            _ = try await manager.prepararExportacao(ids: [item.id])
+            XCTFail("Tampered ciphertext must never produce an exportable file")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .dadoAdulterado)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "The source must remain untouched on export failure")
+    }
+
+    func testThumbnailRejectsImageIOPartialResultWhenLaterChunkIsTampered() async throws {
+        let passphrase = "CredencialDeTesteMiniaturaAutenticada123"
+        _ = try await configureVault(passphrase)
+
+        let fixture = try makeLargePNGFixture()
+        let chunkSize = 1_048_576
+        XCTAssertGreaterThan(fixture.count, chunkSize * 2, "The fixture must span multiple authenticated chunks")
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxThumbnailTamper-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try fixture.write(to: source)
+
+        let item = try await manager.importarArquivo(em: source, nome: source.lastPathComponent, tipo: .foto)
+        let session = try await manager.abrirSessaoDeLeitura(id: item.id)
+        defer { manager.fecharSessaoDeLeitura(id: session.sessionID) }
+
+        let encryptedURL = vaultDirectory
+            .appendingPathComponent("items", isDirectory: true)
+            .appendingPathComponent("\(item.id.uuidString).enc")
+        let tamperOffset = UInt64(chunkSize + 20 + 4 + 128)
+        let readHandle = try FileHandle(forReadingFrom: encryptedURL)
+        try readHandle.seek(toOffset: tamperOffset)
+        let originalByte = try XCTUnwrap(readHandle.read(upToCount: 1)?.first)
+        try readHandle.close()
+        let encryptedFile = try FileHandle(forWritingTo: encryptedURL)
+        try encryptedFile.seek(toOffset: tamperOffset)
+        try encryptedFile.write(contentsOf: Data([originalByte ^ 0x01]))
+        try encryptedFile.close()
+
+        XCTAssertThrowsError(try VaultImageDecoder.thumbnail(from: session, maximumPixelSize: 256)) {
+            XCTAssertEqual($0 as? VaultError, .dadoAdulterado)
+        }
+    }
+
+    private func makeLargePNGFixture() throws -> Data {
+        let width = 1_024
+        let height = 1_024
+        var pixels = Data(count: width * height * 4)
+        pixels.withUnsafeMutableBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var state: UInt32 = 0x1234_5678
+            for pixel in 0..<(width * height) {
+                state = state &* 1_664_525 &+ 1_013_904_223
+                let offset = pixel * 4
+                bytes[offset] = UInt8(truncatingIfNeeded: state >> 16)
+                bytes[offset + 1] = UInt8(truncatingIfNeeded: state >> 8)
+                bytes[offset + 2] = UInt8(truncatingIfNeeded: state)
+                bytes[offset + 3] = 0xFF
+            }
+        }
+        guard let provider = CGDataProvider(data: pixels as CFData),
+              let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+              ) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw VaultError.formatoDeMidiaNaoSuportado
+        }
+        return output as Data
     }
 
     private func configureVault(_ passphrase: String) async throws -> String {

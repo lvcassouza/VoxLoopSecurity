@@ -15,6 +15,12 @@ public struct CofrePrincipalView: View {
     @State private var mostrarFolhaImportacao: Bool = false
     @State private var mostrarConfirmacaoExclusao: Bool = false
     @State private var mostrarConfirmacaoExportacao: Bool = false
+    @State private var mostrarSeletorExportacao: Bool = false
+    @State private var loteExportacao: LoteExportacaoPreparado?
+    @State private var arquivosExportados: [ExportedVaultFile] = []
+    @State private var preparandoExportacao = false
+    @State private var mostrarErroAcao = false
+    @State private var erroAcao = ""
     @State private var termoBusca: String = ""
     @State private var exibirCampoBusca: Bool = false
 
@@ -115,6 +121,7 @@ public struct CofrePrincipalView: View {
                                 ForEach(itensFiltrados) { item in
                                     VoxTileView(
                                         item: item,
+                                        accessManager: accessManager,
                                         isSelecionado: itensSelecionados.contains(item.id),
                                         modoSelecao: modoSelecao
                                     ) {
@@ -193,6 +200,16 @@ public struct CofrePrincipalView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 20)
                 }
+
+                if preparandoExportacao {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+                    ProgressView("Preparando exportação…")
+                        .padding(20)
+                        .background(VoxColors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
             }
             .background(VoxColors.canvas.ignoresSafeArea())
             .navigationTitle("Cofre")
@@ -249,13 +266,16 @@ public struct CofrePrincipalView: View {
                 FolhaImportacaoSinteticaView(accessManager: accessManager)
             }
             .confirmationDialog(
-                "Exportação indisponível nesta versão",
+                "Exportar itens do cofre?",
                 isPresented: $mostrarConfirmacaoExportacao,
                 titleVisibility: .visible
             ) {
-                Button("Entendi", role: .cancel) {}
+                Button("Continuar") {
+                    Task { await prepararExportacaoSelecionada() }
+                }
+                Button("Cancelar", role: .cancel) {}
             } message: {
-                Text("Esta demonstração não lê nem cria arquivos externos.")
+                Text("Uma cópia será criada fora do Vox. O destino controla o que acontece com ela. As cópias do cofre e os arquivos de origem permanecem.")
             }
             .confirmationDialog(
                 "Remover os exemplos selecionados?",
@@ -263,18 +283,103 @@ public struct CofrePrincipalView: View {
                 titleVisibility: .visible
             ) {
                 Button("Apagar cópias do cofre", role: .destructive) {
-                    let ids = itensSelecionados
-                    Task {
-                        for id in ids { try? await accessManager.apagarItemDoCofre(id: id) }
-                        itensSelecionados.removeAll()
-                        modoSelecao = false
-                    }
+                    Task { await apagarItensSelecionados() }
                 }
                 Button("Cancelar", role: .cancel) {}
             } message: {
-                Text("Serão apagadas apenas as cópias cifradas do cofre. Os originais na Fototeca permanecem.")
+                Text("Serão apagadas apenas as cópias do cofre. Os arquivos de origem e backups anteriores permanecem.")
+            }
+            .fileExporter(
+                isPresented: $mostrarSeletorExportacao,
+                items: arquivosExportados,
+                contentTypes: [.image, .movie],
+                onCompletion: concluirExportacao,
+                onCancellation: cancelarExportacao
+            )
+            .alert("Não foi possível concluir", isPresented: $mostrarErroAcao) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(erroAcao)
+            }
+            .onChange(of: accessManager.estadoAcesso) { _, novoEstado in
+                if novoEstado != .desbloqueado {
+                    mostrarSeletorExportacao = false
+                    concluirExportacaoPendente()
+                }
+            }
+            .onDisappear {
+                if !mostrarSeletorExportacao { concluirExportacaoPendente() }
             }
         }
+    }
+
+    @MainActor
+    private func prepararExportacaoSelecionada() async {
+        guard !preparandoExportacao, !itensSelecionados.isEmpty else { return }
+        preparandoExportacao = true
+        defer { preparandoExportacao = false }
+        do {
+            let selectedIDs = accessManager.itens.map(\.id).filter { itensSelecionados.contains($0) }
+            let lote = try await accessManager.prepararExportacao(ids: selectedIDs)
+            guard accessManager.estadoAcesso == .desbloqueado, !accessManager.cortinaPrivacidadeAtiva else {
+                accessManager.concluirExportacao(id: lote.id)
+                return
+            }
+            loteExportacao = lote
+            arquivosExportados = lote.arquivos.map { ExportedVaultFile(prepared: $0) }
+            mostrarSeletorExportacao = true
+        } catch let error as VaultError {
+            erroAcao = error.localizedDescription
+            mostrarErroAcao = true
+        } catch {
+            erroAcao = "Não foi possível preparar os itens para exportação."
+            mostrarErroAcao = true
+        }
+    }
+
+    @MainActor
+    private func apagarItensSelecionados() async {
+        let ids = accessManager.itens.map(\.id).filter { itensSelecionados.contains($0) }
+        var houveErro = false
+        var falhaDeLimpeza = false
+        for id in ids {
+            do {
+                try await accessManager.apagarItemDoCofre(id: id)
+            } catch let error as VaultError {
+                houveErro = true
+                falhaDeLimpeza = falhaDeLimpeza || error == .falhaNaLimpezaDaExclusao
+            } catch {
+                houveErro = true
+            }
+        }
+        itensSelecionados.formIntersection(Set(accessManager.itens.map(\.id)))
+        if itensSelecionados.isEmpty { modoSelecao = false }
+        if houveErro {
+            erroAcao = falhaDeLimpeza
+                ? VaultError.falhaNaLimpezaDaExclusao.localizedDescription
+                : "Não foi possível apagar um ou mais itens. O que não foi concluído permanece no cofre."
+            mostrarErroAcao = true
+        }
+    }
+
+    private func concluirExportacao(_ result: Result<[URL], any Error>) {
+        if case .failure = result {
+            erroAcao = "O Vox não conseguiu concluir a gravação no destino escolhido. As cópias do cofre permanecem intactas."
+            mostrarErroAcao = true
+        }
+        concluirExportacaoPendente()
+    }
+
+    private func cancelarExportacao() {
+        concluirExportacaoPendente()
+    }
+
+    private func concluirExportacaoPendente() {
+        if let loteExportacao {
+            accessManager.concluirExportacao(id: loteExportacao.id)
+        }
+        loteExportacao = nil
+        arquivosExportados = []
     }
 
     private var itensFiltrados: [ItemDoCofre] {
