@@ -17,6 +17,7 @@ public final class VaultAccessManager: ObservableObject {
     @Published public private(set) var codigoRecuperacaoPendente: String?
     @Published public private(set) var ultimoBackupData: Date?
     @Published public private(set) var erroAcesso: String?
+    @Published public private(set) var tipoCredencialConfigurada: TipoCredencial = .texto
 
     private let store: VaultFileStore
     private var bloqueioEmAndamento: Task<Void, Never>?
@@ -55,12 +56,31 @@ public final class VaultAccessManager: ObservableObject {
         // Keep the source-compatible arguments, but never trust caller-supplied access state.
         _ = configuradoInicial
         self.itens = exists ? [] : itensIniciais
+        if exists {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.tipoCredencialConfigurada = await self.store.obterTipoCredencial()
+            }
+        }
     }
 
     // MARK: - Setup and authentication
 
+    public func validarCredencial(_ credencial: String) throws {
+        if PadraoDesbloqueio.ehPadrao(credencial: credencial) {
+            guard let pontos = PadraoDesbloqueio.deserializar(credencial: credencial),
+                  pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                throw VaultError.padraoMuitoCurto
+            }
+        } else {
+            guard credencial.count >= 12 else {
+                throw VaultError.credencialMuitoCurta
+            }
+        }
+    }
+
     public func configurarCofre(credencial: String, confirmacao: String) async throws -> String {
-        guard credencial.count >= 12 else { throw VaultError.credencialMuitoCurta }
+        try validarCredencial(credencial)
         guard credencial == confirmacao else { throw VaultError.credenciaisNaoCoincidem }
         guard !isConfigurado else { throw VaultError.cofreJaConfigurado }
         erroAcesso = nil
@@ -83,6 +103,7 @@ public final class VaultAccessManager: ObservableObject {
         try await store.confirmSetup(code: trechoDigitado)
         codigoRecuperacaoPendente = nil
         isConfigurado = true
+        tipoCredencialConfigurada = await store.obterTipoCredencial()
         estadoAcesso = .desbloqueado
         tentativasFalhas = 0
         erroAcesso = nil
@@ -113,6 +134,7 @@ public final class VaultAccessManager: ObservableObject {
             }
             itens = loadedItems
             isConfigurado = true
+            tipoCredencialConfigurada = await store.obterTipoCredencial()
             estadoAcesso = .desbloqueado
             tentativasFalhas = 0
             erroAcesso = nil
@@ -176,7 +198,8 @@ public final class VaultAccessManager: ObservableObject {
         confirmacao: String
     ) async throws {
         guard isConfigurado else { throw VaultError.codigoRecuperacaoInvalido }
-        guard !novaCredencial.isEmpty else { throw VaultError.credencialMuitoCurta }
+        try validarCredencial(novaCredencial)
+        guard novaCredencial == confirmacao else { throw VaultError.credenciaisNaoCoincidem }
         let epoch = sessionEpoch
         let restoredItems = try await store.recover(code: codigo, newPassphrase: novaCredencial, confirmation: confirmacao)
         guard epoch == sessionEpoch, !cortinaPrivacidadeAtiva else {
@@ -184,6 +207,7 @@ public final class VaultAccessManager: ObservableObject {
             throw VaultError.operacaoInterrompida
         }
         itens = restoredItems
+        tipoCredencialConfigurada = await store.obterTipoCredencial()
         estadoAcesso = .desbloqueado
         tentativasFalhas = 0
         erroAcesso = nil
@@ -201,6 +225,7 @@ public final class VaultAccessManager: ObservableObject {
         estadoBackup = .nuncaCriado
         biometriaAtiva = false
         tentativasFalhas = 0
+        tipoCredencialConfigurada = .texto
         estadoAcesso = .naoConfigurado
         SanitizedLogger.shared.log(.cofreResetado)
     }
@@ -483,6 +508,8 @@ public final class VaultAccessManager: ObservableObject {
         guard !isConfigurado, estadoAcesso == .naoConfigurado, !cortinaPrivacidadeAtiva else {
             throw VaultError.cofreNaoVazioParaRestauracao
         }
+        try validarCredencial(novaCredencial)
+        guard novaCredencial == confirmacao else { throw VaultError.credenciaisNaoCoincidem }
         let epoch = sessionEpoch
         let prepared = try await store.prepareRestore(
             from: url,
@@ -505,6 +532,7 @@ public final class VaultAccessManager: ObservableObject {
         let restoredItems = try await store.confirmRestore(id: id, recoveryCodeConfirmation: trechoDigitado)
         pendingRestoreID = nil
         isConfigurado = true
+        tipoCredencialConfigurada = await store.obterTipoCredencial()
         if cortinaPrivacidadeAtiva {
             itens.removeAll(keepingCapacity: false)
             estadoAcesso = .bloqueado

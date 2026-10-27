@@ -4,6 +4,7 @@ import Foundation
 public enum VaultError: LocalizedError, Equatable, Sendable {
     case credenciaisNaoCoincidem
     case credencialMuitoCurta
+    case padraoMuitoCurto
     case credencialIncorreta
     case codigoRecuperacaoInvalido
     case confirmacaoInvalida
@@ -26,9 +27,11 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .credenciaisNaoCoincidem:
-            return "As senhas digitadas não coincidem."
+            return "As credenciais informadas não coincidem."
         case .credencialMuitoCurta:
             return "A credencial deve conter pelo menos 12 caracteres."
+        case .padraoMuitoCurto:
+            return "O padrão de desbloqueio deve ligar pelo menos 4 pontos."
         case .credencialIncorreta:
             return "Credencial incorreta. Tente novamente."
         case .codigoRecuperacaoInvalido:

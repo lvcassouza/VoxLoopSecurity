@@ -206,52 +206,95 @@ struct TrocarCredencialSheet: View {
     @ObservedObject var accessManager: VaultAccessManager
     @Environment(\.dismiss) private var dismiss
 
+    @State private var tipoSelecionado: TipoCredencial = .texto
+    @State private var codigoConfirmacao = ""
     @State private var novaSenha = ""
     @State private var confirmacao = ""
-    @State private var codigoConfirmacao = ""
+    @State private var primeiroPadrao: [Int]?
+    @State private var etapaConfirmacaoPadrao = false
+    @State private var padraoErro = false
+    @State private var processando = false
     @State private var erro: String?
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Trocar credencial principal")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(VoxColors.ink)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Trocar credencial principal")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(VoxColors.ink)
 
-                Text("Use uma credencial exclusiva para este cofre de teste. A troca atualiza o envelope local; não altera backups antigos.")
-                    .font(.system(size: 14))
-                    .foregroundColor(VoxColors.inkSecondary)
+                    Text("Use uma credencial exclusiva para este cofre. A troca atualiza o envelope local sem alterar backups antigos.")
+                        .font(.system(size: 14))
+                        .foregroundColor(VoxColors.inkSecondary)
 
-                VoxTextField("Código de recuperação", placeholder: "8 caracteres por grupo", texto: $codigoConfirmacao)
-                VoxSecureField("Nova credencial de teste", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
-                VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacao)
+                    VoxTextField("Código de recuperação", placeholder: "8 caracteres por grupo", texto: $codigoConfirmacao)
 
-                if let erro {
-                    Text(erro)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(VoxColors.danger)
-                }
-
-                Spacer()
-
-                VoxButton("Salvar nova credencial", variante: .primary) {
-                    Task {
-                    do {
-                        try await accessManager.redefinirCredencialComCodigo(
-                            codigo: codigoConfirmacao,
-                            novaCredencial: novaSenha,
-                            confirmacao: confirmacao
-                        )
-                        dismiss()
-                    } catch let e as VaultError {
-                        erro = e.localizedDescription
-                    } catch {
-                        erro = "Falha ao trocar credencial."
+                    Picker("Tipo de credencial", selection: $tipoSelecionado) {
+                        Text(TipoCredencial.texto.titulo).tag(TipoCredencial.texto)
+                        Text(TipoCredencial.padrao.titulo).tag(TipoCredencial.padrao)
                     }
+                    .pickerStyle(.segmented)
+                    .onChange(of: tipoSelecionado) { _, _ in
+                        novaSenha = ""
+                        confirmacao = ""
+                        primeiroPadrao = nil
+                        etapaConfirmacaoPadrao = false
+                        padraoErro = false
+                        erro = nil
+                    }
+
+                    if tipoSelecionado == .texto {
+                        VoxSecureField("Nova senha", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
+                        VoxSecureField("Confirme a senha", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacao)
+
+                        if let erro {
+                            Text(erro)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(VoxColors.danger)
+                        }
+
+                        VoxButton("Salvar nova credencial", variante: .primary, isLoading: processando) {
+                            Task {
+                                await salvarCredencial(nova: novaSenha, conf: confirmacao)
+                            }
+                        }
+                    } else {
+                        VStack(spacing: 12) {
+                            Text(etapaConfirmacaoPadrao ? "Confirme o novo padrão desenhado" : "Desenhe o novo padrão de pontos")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(VoxColors.ink)
+
+                            VoxPatternLockView(
+                                isError: padraoErro,
+                                isEnabled: !processando
+                            ) { pontos in
+                                tratarPadrao(pontos)
+                            }
+                            .frame(maxWidth: 280, maxHeight: 280)
+
+                            if etapaConfirmacaoPadrao {
+                                Button("Recomeçar desenho") {
+                                    primeiroPadrao = nil
+                                    etapaConfirmacaoPadrao = false
+                                    padraoErro = false
+                                    erro = nil
+                                }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(VoxColors.brand)
+                            }
+
+                            if let erro {
+                                Text(erro)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(VoxColors.danger)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                 }
+                .padding(24)
             }
-            .padding(24)
             .background(VoxColors.canvas.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -259,6 +302,58 @@ struct TrocarCredencialSheet: View {
                         .foregroundColor(VoxColors.brand)
                 }
             }
+        }
+    }
+
+    private func tratarPadrao(_ pontos: [Int]) {
+        padraoErro = false
+        erro = nil
+        if !etapaConfirmacaoPadrao {
+            guard pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                padraoErro = true
+                erro = "O padrão deve ligar pelo menos 4 pontos."
+                return
+            }
+            primeiroPadrao = pontos
+            etapaConfirmacaoPadrao = true
+        } else {
+            guard let primeiro = primeiroPadrao else {
+                etapaConfirmacaoPadrao = false
+                return
+            }
+            if pontos == primeiro {
+                let credencialStr = PadraoDesbloqueio.serializar(pontos: primeiro)
+                Task {
+                    await salvarCredencial(nova: credencialStr, conf: credencialStr)
+                }
+            } else {
+                padraoErro = true
+                erro = "Os padrões não coincidem. Tente desenhar novamente."
+                primeiroPadrao = nil
+                etapaConfirmacaoPadrao = false
+            }
+        }
+    }
+
+    @MainActor
+    private func salvarCredencial(nova: String, conf: String) async {
+        guard !processando else { return }
+        processando = true
+        defer { processando = false }
+        erro = nil
+        do {
+            try await accessManager.redefinirCredencialComCodigo(
+                codigo: codigoConfirmacao,
+                novaCredencial: nova,
+                confirmacao: conf
+            )
+            dismiss()
+        } catch let e as VaultError {
+            erro = e.localizedDescription
+            padraoErro = true
+        } catch {
+            erro = "Falha ao trocar credencial."
+            padraoErro = true
         }
     }
 }

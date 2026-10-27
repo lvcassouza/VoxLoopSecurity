@@ -9,9 +9,13 @@ public struct PerdiAcessoView: View {
     public let onVoltarAoBloqueio: () -> Void
 
     @State private var modoRedefinir: Bool = false
+    @State private var tipoSelecionado: TipoCredencial = .texto
     @State private var codigoRecuperacao: String = ""
     @State private var novaSenha: String = ""
     @State private var confirmacaoSenha: String = ""
+    @State private var primeiroPadrao: [Int]?
+    @State private var etapaConfirmacaoPadrao: Bool = false
+    @State private var padraoErro: Bool = false
     @State private var mensagemErro: String?
     @State private var confirmacaoApagarCofre: Bool = false
     @State private var processando: Bool = false
@@ -82,20 +86,69 @@ public struct PerdiAcessoView: View {
 
                     } else {
                         // Formulário de redefinição com o código
-                        VStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 16) {
                             VoxTextField("Código de recuperação", placeholder: "8 caracteres por grupo", texto: $codigoRecuperacao)
-                            VoxSecureField("Nova credencial de teste", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
-                            VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoSenha)
-                        }
 
-                        if let erro = mensagemErro {
-                            Text(erro)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(VoxColors.danger)
-                        }
+                            Picker("Tipo de credencial", selection: $tipoSelecionado) {
+                                Text(TipoCredencial.texto.titulo).tag(TipoCredencial.texto)
+                                Text(TipoCredencial.padrao.titulo).tag(TipoCredencial.padrao)
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: tipoSelecionado) { _, _ in
+                                novaSenha = ""
+                                confirmacaoSenha = ""
+                                primeiroPadrao = nil
+                                etapaConfirmacaoPadrao = false
+                                padraoErro = false
+                                mensagemErro = nil
+                            }
 
-                        VoxButton("Redefinir credencial", variante: .primary, isLoading: processando) {
-                            Task { await redefinirComCodigo() }
+                            if tipoSelecionado == .texto {
+                                VoxSecureField("Nova senha", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
+                                VoxSecureField("Confirme a senha", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoSenha)
+
+                                if let erro = mensagemErro {
+                                    Text(erro)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(VoxColors.danger)
+                                }
+
+                                VoxButton("Redefinir credencial", variante: .primary, isLoading: processando) {
+                                    Task { await redefinirCom(nova: novaSenha, conf: confirmacaoSenha) }
+                                }
+                            } else {
+                                VStack(spacing: 12) {
+                                    Text(etapaConfirmacaoPadrao ? "Confirme o novo padrão desenhado" : "Desenhe o novo padrão de pontos")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(VoxColors.ink)
+
+                                    VoxPatternLockView(
+                                        isError: padraoErro,
+                                        isEnabled: !processando
+                                    ) { pontos in
+                                        tratarPadrao(pontos)
+                                    }
+                                    .frame(maxWidth: 280, maxHeight: 280)
+
+                                    if etapaConfirmacaoPadrao {
+                                        Button("Recomeçar desenho") {
+                                            primeiroPadrao = nil
+                                            etapaConfirmacaoPadrao = false
+                                            padraoErro = false
+                                            mensagemErro = nil
+                                        }
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(VoxColors.brand)
+                                    }
+
+                                    if let erro = mensagemErro {
+                                        Text(erro)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(VoxColors.danger)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
                         }
 
                         Button("Voltar às orientações") {
@@ -133,8 +186,38 @@ public struct PerdiAcessoView: View {
         }
     }
 
+    private func tratarPadrao(_ pontos: [Int]) {
+        padraoErro = false
+        mensagemErro = nil
+        if !etapaConfirmacaoPadrao {
+            guard pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                padraoErro = true
+                mensagemErro = "O padrão deve ligar pelo menos 4 pontos."
+                return
+            }
+            primeiroPadrao = pontos
+            etapaConfirmacaoPadrao = true
+        } else {
+            guard let primeiro = primeiroPadrao else {
+                etapaConfirmacaoPadrao = false
+                return
+            }
+            if pontos == primeiro {
+                let credencialStr = PadraoDesbloqueio.serializar(pontos: primeiro)
+                Task {
+                    await redefinirCom(nova: credencialStr, conf: credencialStr)
+                }
+            } else {
+                padraoErro = true
+                mensagemErro = "Os padrões não coincidem. Tente desenhar novamente."
+                primeiroPadrao = nil
+                etapaConfirmacaoPadrao = false
+            }
+        }
+    }
+
     @MainActor
-    private func redefinirComCodigo() async {
+    private func redefinirCom(nova: String, conf: String) async {
         guard !processando else { return }
         processando = true
         defer { processando = false }
@@ -142,14 +225,16 @@ public struct PerdiAcessoView: View {
         do {
             try await accessManager.redefinirCredencialComCodigo(
                 codigo: codigoRecuperacao,
-                novaCredencial: novaSenha,
-                confirmacao: confirmacaoSenha
+                novaCredencial: nova,
+                confirmacao: conf
             )
             // Desbloqueia automaticamente e volta
         } catch let erro as VaultError {
             mensagemErro = erro.localizedDescription
+            padraoErro = true
         } catch {
             mensagemErro = "Código de recuperação inválido."
+            padraoErro = true
         }
     }
 }
