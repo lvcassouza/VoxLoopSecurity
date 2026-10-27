@@ -43,7 +43,7 @@ public struct TelaBloqueadaView: View {
 
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
-                    VoxSecureField("Credencial principal", placeholder: "Digite sua frase ou senha", texto: $credencialDigitada)
+                    VoxSecureField("Credencial principal", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $credencialDigitada)
 
                     if erroAutenticacao {
                         Text(accessManager.erroAcesso ?? "Não foi possível desbloquear. Verifique a credencial e o arquivo do cofre.")

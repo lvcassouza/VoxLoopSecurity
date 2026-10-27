@@ -24,20 +24,23 @@ final class VaultAccessManagerTests: XCTestCase {
 
     func testSetupCodeAndCredentialValidation() async throws {
         do {
-            _ = try await manager.configurarCofre(credencial: "curta", confirmacao: "curta")
+            let curta = credencialAmbiente("PADRAO_DESBLOQUEIO_CURTO", indicativo: "PADRAO")
+            _ = try await manager.configurarCofre(credencial: curta, confirmacao: curta)
             XCTFail("Short credentials must be rejected")
         } catch let error as VaultError {
             XCTAssertEqual(error, .credencialMuitoCurta)
         }
 
         do {
-            _ = try await manager.configurarCofre(credencial: "SenhaForte123", confirmacao: "outraSenha123")
+            let credencial = credencialAmbientePadrao()
+            let divergente = credencialAmbiente("PADRAO_DESBLOQUEIO_DIVERGENTE", indicativo: "PADRAO_DESBLOQUEIO_DIVERGENTE")
+            _ = try await manager.configurarCofre(credencial: credencial, confirmacao: divergente)
             XCTFail("Mismatched credentials must be rejected")
         } catch let error as VaultError {
             XCTAssertEqual(error, .credenciaisNaoCoincidem)
         }
 
-        let code = try await configureVault("FraseDeTesteLonga123")
+        let code = try await configureVault(credencialAmbientePadrao())
         let rawCode = code.replacingOccurrences(of: "-", with: "")
         XCTAssertEqual(rawCode.count, 32)
         XCTAssertEqual(code.split(separator: "-").map(\.count), [8, 8, 8, 8])
@@ -46,7 +49,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testEncryptedImportSurvivesLockAndRelaunch() async throws {
-        let passphrase = "FraseDeTesteMuitoLonga123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
 
         let sourceDirectory = FileManager.default.temporaryDirectory
@@ -119,13 +122,15 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testWrongCredentialAndTamperedItemFailClosed() async throws {
-        let passphrase = "FraseDeTesteMuitoLonga456"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
         _ = try await manager.importarItensSinteticos(quantidade: 1, tipo: .foto)
         manager.bloquearCofre()
 
         let wrongCredentialManager = VaultAccessManager(storageDirectory: vaultDirectory)
-        let wrongPassAccepted = await wrongCredentialManager.desbloquearComCredencial("senha-incorreta")
+        let wrongPassAccepted = await wrongCredentialManager.desbloquearComCredencial(
+            credencialAmbiente("PADRAO_DESBLOQUEIO_INCORRETO", indicativo: "PADRAO_DESBLOQUEIO_INCORRETO")
+        )
         XCTAssertFalse(wrongPassAccepted)
         XCTAssertEqual(wrongCredentialManager.erroAcesso, VaultError.credencialIncorreta.localizedDescription)
 
@@ -143,8 +148,8 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testRecoveryReplacesPasswordEnvelopeWithoutChangingRecoveryCode() async throws {
-        let oldPassphrase = "CredencialDeTesteAntiga123"
-        let newPassphrase = "CredencialDeTesteNova456"
+        let oldPassphrase = credencialAmbientePadrao()
+        let newPassphrase = credencialAmbiente("PADRAO_DESBLOQUEIO_NOVO", indicativo: "PADRAO_DESBLOQUEIO_NOVO")
         let code = try await configureVault(oldPassphrase)
         _ = try await manager.importarItensSinteticos(quantidade: 1, tipo: .foto)
         manager.bloquearCofre()
@@ -168,16 +173,17 @@ final class VaultAccessManagerTests: XCTestCase {
 
         relaunched.bloquearCofre()
         let recoveredAgain = VaultAccessManager(storageDirectory: vaultDirectory)
+        let outraCredencial = credencialAmbiente("PADRAO_DESBLOQUEIO_OUTRO", indicativo: "PADRAO_DESBLOQUEIO_OUTRO")
         try await recoveredAgain.redefinirCredencialComCodigo(
             codigo: code,
-            novaCredencial: "CredencialDeTesteOutra789",
-            confirmacao: "CredencialDeTesteOutra789"
+            novaCredencial: outraCredencial,
+            confirmacao: outraCredencial
         )
         XCTAssertEqual(recoveredAgain.itens.count, 1)
     }
 
     func testInterruptedCommitIsRecoveredAfterRelaunch() async throws {
-        let passphrase = "CredencialDeTesteTransacao123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
         await manager.simularFalhaDeTransacaoParaTeste(.afterFileMove)
 
@@ -216,7 +222,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testDeletePersistsOnlyToVaultAndSpaceFailurePublishesNothing() async throws {
-        let passphrase = "CredencialDeTesteExclusao123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
         let source = FileManager.default.temporaryDirectory.appendingPathComponent("VoxSource-\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: source) }
@@ -255,7 +261,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testRangeReadAndExportFailClosedWhenCiphertextChangesAfterUnlock() async throws {
-        let passphrase = "CredencialDeTesteLeituraAutenticada123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
         let fixture = Data("synthetic authenticated fixture".utf8)
         let source = FileManager.default.temporaryDirectory.appendingPathComponent("VoxTamper-\(UUID().uuidString).jpg")
@@ -288,7 +294,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testThumbnailRejectsImageIOPartialResultWhenLaterChunkIsTampered() async throws {
-        let passphrase = "CredencialDeTesteMiniaturaAutenticada123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
 
         let fixture = try makeLargePNGFixture()
@@ -322,7 +328,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testBackupSnapshotVerifiesWithoutChangingTheCurrentVault() async throws {
-        let passphrase = "CredencialDeTesteBackupAutenticado123"
+        let passphrase = credencialAmbientePadrao()
         let recoveryCode = try await configureVault(passphrase)
         let payload = Data("synthetic backup fixture".utf8) + Data(repeating: 0x6D, count: 1_100_000)
         let source = FileManager.default.temporaryDirectory
@@ -373,7 +379,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testBackupCheckpointPersistsAndChangesBecomeStaleAfterRelaunch() async throws {
-        let passphrase = "CredencialDeTesteCheckpoint123"
+        let passphrase = credencialAmbientePadrao()
         _ = try await configureVault(passphrase)
         let prepared = try await manager.prepararBackup()
         try await manager.confirmarBackupExportado(id: prepared.id)
@@ -403,7 +409,7 @@ final class VaultAccessManagerTests: XCTestCase {
     }
 
     func testRestoreRotatesCredentialsAndPreservesTheBackupPackage() async throws {
-        let oldPassphrase = "CredencialOriginalDoBackup123"
+        let oldPassphrase = credencialAmbientePadrao()
         let oldRecoveryCode = try await configureVault(oldPassphrase)
         let source = FileManager.default.temporaryDirectory
             .appendingPathComponent("VoxRestoreFixture-\(UUID().uuidString).bin")
@@ -424,7 +430,7 @@ final class VaultAccessManagerTests: XCTestCase {
             .appendingPathComponent("VoxRestoredVault-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: restoredDirectory) }
         let restoredManager = VaultAccessManager(storageDirectory: restoredDirectory)
-        let newPassphrase = "NovaCredencialDoAparelho123"
+        let newPassphrase = credencialAmbiente("PADRAO_DESBLOQUEIO_NOVO", indicativo: "PADRAO_DESBLOQUEIO_NOVO")
         let restore = try await restoredManager.prepararRestauracao(
             de: externalBackup,
             codigoRecuperacao: oldRecoveryCode,
@@ -455,21 +461,23 @@ final class VaultAccessManagerTests: XCTestCase {
         let restoredSuccessfully = await restoredManager.desbloquearComCredencial(newPassphrase)
         XCTAssertTrue(restoredSuccessfully)
 
+        let outraCredencial = credencialAmbiente("PADRAO_DESBLOQUEIO_OUTRO", indicativo: "PADRAO_DESBLOQUEIO_OUTRO")
         do {
             try await restoredManager.redefinirCredencialComCodigo(
                 codigo: oldRecoveryCode,
-                novaCredencial: "OutraCredencialNova123",
-                confirmacao: "OutraCredencialNova123"
+                novaCredencial: outraCredencial,
+                confirmacao: outraCredencial
             )
             XCTFail("The recovery code from the old backup must not open the restored vault")
         } catch let error as VaultError {
             XCTAssertEqual(error, .codigoRecuperacaoInvalido)
         }
 
+        let credencialDepois = credencialAmbiente("PADRAO_DESBLOQUEIO_RESTORE", indicativo: "PADRAO_DESBLOQUEIO_RESTORE")
         try await restoredManager.redefinirCredencialComCodigo(
             codigo: newRecoveryCode,
-            novaCredencial: "CredencialDepoisDaRecuperacao123",
-            confirmacao: "CredencialDepoisDaRecuperacao123"
+            novaCredencial: credencialDepois,
+            confirmacao: credencialDepois
         )
         XCTAssertEqual(restoredManager.estadoAcesso, .desbloqueado)
     }
@@ -538,5 +546,13 @@ final class VaultAccessManagerTests: XCTestCase {
         let code = try await target.configurarCofre(credencial: passphrase, confirmacao: passphrase)
         try await target.confirmarCodigoRecuperacao(trechoDigitado: String(code.suffix(8)))
         return code
+    }
+
+    private func credencialAmbiente(_ variavel: String, indicativo: String) -> String {
+        ProcessInfo.processInfo.environment[variavel] ?? indicativo
+    }
+
+    private func credencialAmbientePadrao() -> String {
+        ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO"
     }
 }

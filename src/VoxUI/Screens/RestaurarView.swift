@@ -103,9 +103,9 @@ public struct RestaurarView: View {
                     .lineLimit(2)
             }
 
-            campoSeguro("Código de recuperação do backup", texto: $codigoBackup)
-            campoSeguro("Nova credencial (mínimo 12 caracteres)", texto: $novaCredencial)
-            campoSeguro("Confirme a nova credencial", texto: $confirmacaoCredencial)
+            campoSeguro("Código de recuperação do backup", placeholder: "8 caracteres por grupo", texto: $codigoBackup)
+            campoSeguro("Nova credencial (mínimo 12 caracteres)", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaCredencial)
+            campoSeguro("Confirme a nova credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoCredencial)
 
             VoxButton("Validar e preparar restauração", icone: "checkmark.shield", isLoading: preparando) {
                 iniciarPreparacaoRestauracao()
@@ -214,17 +214,26 @@ public struct RestaurarView: View {
         }
     }
 
-    private func campoSeguro(_ titulo: String, texto: Binding<String>) -> some View {
-        SecureField(titulo, text: texto)
-            .textContentType(.password)
-            #if os(iOS)
-            .textInputAutocapitalization(.never)
-            #endif
-            .autocorrectionDisabled()
-            .padding(14)
-            .background(VoxColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(VoxColors.border, lineWidth: 1))
+    private func campoSeguro(
+        _ titulo: String,
+        placeholder: String = ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO",
+        texto: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(titulo)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(VoxColors.inkSecondary)
+            SecureField(placeholder, text: texto)
+                .textContentType(.password)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                .padding(14)
+                .background(VoxColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(VoxColors.border, lineWidth: 1))
+        }
     }
 
     @MainActor
