@@ -39,17 +39,3 @@ public enum EstadoBackup: Equatable, Sendable {
         }
     }
 }
-
-/// Resultado da verificação de backup sem modificar o cofre atual.
-public enum ResultadoVerificacaoBackup: Equatable, Sendable {
-    case legivel(data: Date, contagemItens: Int)
-    case impossivelVerificar(motivo: String)
-    case formatoIncompativel(versaoEncontrada: String)
-}
-
-/// Modos de simulação para testes e verificação na Casca da Fase 2.
-public enum ModoSimulacaoBackup: Sendable {
-    case integro
-    case adulterado
-    case versaoIncompativel
-}

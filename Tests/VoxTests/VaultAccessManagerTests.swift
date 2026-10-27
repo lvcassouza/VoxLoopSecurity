@@ -321,6 +321,171 @@ final class VaultAccessManagerTests: XCTestCase {
         }
     }
 
+    func testBackupSnapshotVerifiesWithoutChangingTheCurrentVault() async throws {
+        let passphrase = "CredencialDeTesteBackupAutenticado123"
+        let recoveryCode = try await configureVault(passphrase)
+        let payload = Data("synthetic backup fixture".utf8) + Data(repeating: 0x6D, count: 1_100_000)
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxBackupFixture-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try payload.write(to: source)
+        let item = try await manager.importarArquivo(em: source, nome: source.lastPathComponent, tipo: .foto)
+        let itemsBeforeVerification = manager.itens
+
+        let backup = try await manager.prepararBackup()
+        let packageNames = Set(try FileManager.default.contentsOfDirectory(atPath: backup.url.path))
+        XCTAssertEqual(packageNames, ["backup.manifest", "items", "vault.header", "vault.index"])
+        XCTAssertEqual(
+            try Data(contentsOf: backup.url.appendingPathComponent("items/\(item.id.uuidString).enc")),
+            try Data(contentsOf: vaultDirectory.appendingPathComponent("items/\(item.id.uuidString).enc")),
+            "The backup package must preserve the authenticated ciphertext without creating plaintext media"
+        )
+
+        let summary = try await manager.verificarBackup(em: backup.url, codigoRecuperacao: recoveryCode)
+        XCTAssertEqual(summary.contagemItens, 1)
+        XCTAssertGreaterThan(summary.tamanhoBytes, Int64(payload.count))
+        XCTAssertEqual(manager.itens, itemsBeforeVerification, "Verification must not modify the current vault")
+        XCTAssertEqual(try Data(contentsOf: source), payload, "Backup creation must preserve the source file")
+
+        do {
+            _ = try await manager.verificarBackup(em: backup.url, codigoRecuperacao: "00000000-00000000-00000000-00000000")
+            XCTFail("A wrong recovery code must not verify a backup")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .codigoRecuperacaoInvalido)
+        }
+
+        let corruptedBackup = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxCorruptedBackup-\(UUID().uuidString).voxbackup", isDirectory: true)
+        try FileManager.default.copyItem(at: backup.url, to: corruptedBackup)
+        defer { try? FileManager.default.removeItem(at: corruptedBackup) }
+        let manifestURL = corruptedBackup.appendingPathComponent("backup.manifest")
+        var manifest = try Data(contentsOf: manifestURL)
+        manifest[manifest.startIndex] ^= 0x01
+        try manifest.write(to: manifestURL, options: .atomic)
+        do {
+            _ = try await manager.verificarBackup(em: corruptedBackup, codigoRecuperacao: recoveryCode)
+            XCTFail("A modified manifest must fail authentication")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .dadoAdulterado)
+        }
+        XCTAssertEqual(manager.itens, itemsBeforeVerification, "Failed verification must not alter the active vault")
+        manager.cancelarBackup(id: backup.id)
+    }
+
+    func testBackupCheckpointPersistsAndChangesBecomeStaleAfterRelaunch() async throws {
+        let passphrase = "CredencialDeTesteCheckpoint123"
+        _ = try await configureVault(passphrase)
+        let prepared = try await manager.prepararBackup()
+        try await manager.confirmarBackupExportado(id: prepared.id)
+        guard case .atualizado(_, let count) = manager.estadoBackup else {
+            return XCTFail("A confirmed export should persist the current backup checkpoint")
+        }
+        XCTAssertEqual(count, 0)
+
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxCheckpointFixture-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: source) }
+        try Data(repeating: 0x31, count: 4_096).write(to: source)
+        _ = try await manager.importarArquivo(em: source, nome: source.lastPathComponent, tipo: .foto)
+        guard case .desatualizado(_, let pending) = manager.estadoBackup else {
+            return XCTFail("A content change after export must stale the backup")
+        }
+        XCTAssertEqual(pending, 1)
+
+        manager.bloquearCofre()
+        let reopened = VaultAccessManager(storageDirectory: vaultDirectory)
+        let reopenedSuccessfully = await reopened.desbloquearComCredencial(passphrase)
+        XCTAssertTrue(reopenedSuccessfully)
+        guard case .desatualizado(_, let pendingAfterRelaunch) = reopened.estadoBackup else {
+            return XCTFail("The stale status must survive locking and reopening")
+        }
+        XCTAssertEqual(pendingAfterRelaunch, 1)
+    }
+
+    func testRestoreRotatesCredentialsAndPreservesTheBackupPackage() async throws {
+        let oldPassphrase = "CredencialOriginalDoBackup123"
+        let oldRecoveryCode = try await configureVault(oldPassphrase)
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxRestoreFixture-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: source) }
+        let sourceBytes = Data("synthetic restore payload".utf8) + Data(repeating: 0xA3, count: 300_000)
+        try sourceBytes.write(to: source)
+        let originalItem = try await manager.importarArquivo(em: source, nome: source.lastPathComponent, tipo: .foto)
+
+        let preparedBackup = try await manager.prepararBackup()
+        let externalBackup = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxRestoreSource-\(UUID().uuidString).voxbackup", isDirectory: true)
+        try FileManager.default.copyItem(at: preparedBackup.url, to: externalBackup)
+        defer { try? FileManager.default.removeItem(at: externalBackup) }
+        let sourceSnapshot = try backupPackageBytes(at: externalBackup)
+        manager.cancelarBackup(id: preparedBackup.id)
+
+        let restoredDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoxRestoredVault-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: restoredDirectory) }
+        let restoredManager = VaultAccessManager(storageDirectory: restoredDirectory)
+        let newPassphrase = "NovaCredencialDoAparelho123"
+        let restore = try await restoredManager.prepararRestauracao(
+            de: externalBackup,
+            codigoRecuperacao: oldRecoveryCode,
+            novaCredencial: newPassphrase,
+            confirmacao: newPassphrase
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: restoredDirectory.path))
+
+        do {
+            try await restoredManager.confirmarNovoCodigoRecuperacao(id: restore.id, trechoDigitado: "00000000")
+            XCTFail("The new recovery code must be confirmed before installation")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .confirmacaoInvalida)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: restoredDirectory.path))
+
+        let newRecoveryCode = restore.codigoRecuperacao
+        try await restoredManager.confirmarNovoCodigoRecuperacao(
+            id: restore.id,
+            trechoDigitado: String(newRecoveryCode.filter(\.isHexDigit).suffix(8))
+        )
+        XCTAssertTrue(restoredManager.isConfigurado)
+        XCTAssertEqual(restoredManager.itens.map(\.id), [originalItem.id])
+        XCTAssertEqual(try backupPackageBytes(at: externalBackup), sourceSnapshot)
+        XCTAssertEqual(try Data(contentsOf: source), sourceBytes)
+
+        restoredManager.bloquearCofre()
+        let restoredSuccessfully = await restoredManager.desbloquearComCredencial(newPassphrase)
+        XCTAssertTrue(restoredSuccessfully)
+
+        do {
+            try await restoredManager.redefinirCredencialComCodigo(
+                codigo: oldRecoveryCode,
+                novaCredencial: "OutraCredencialNova123",
+                confirmacao: "OutraCredencialNova123"
+            )
+            XCTFail("The recovery code from the old backup must not open the restored vault")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .codigoRecuperacaoInvalido)
+        }
+
+        try await restoredManager.redefinirCredencialComCodigo(
+            codigo: newRecoveryCode,
+            novaCredencial: "CredencialDepoisDaRecuperacao123",
+            confirmacao: "CredencialDepoisDaRecuperacao123"
+        )
+        XCTAssertEqual(restoredManager.estadoAcesso, .desbloqueado)
+    }
+
+    private func backupPackageBytes(at directory: URL) throws -> [String: Data] {
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))
+        var files: [String: Data] = [:]
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            let relativePath = String(url.path.dropFirst(directory.path.count + 1))
+            files[relativePath] = try Data(contentsOf: url)
+        }
+        return files
+    }
+
     private func makeLargePNGFixture() throws -> Data {
         let width = 1_024
         let height = 1_024
