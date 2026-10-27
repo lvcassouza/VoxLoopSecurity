@@ -4,13 +4,23 @@ import VoxDomain
 #endif
 
 /// Tela para criar a credencial principal (seção 6.2 de ui-visual-spec.md).
+/// Permite escolher entre senha escrita (texto) ou padrão (linhas ligando pontos).
 public struct CriarCredencialView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onAvancarComCodigo: (String) -> Void
     public let onVoltar: () -> Void
 
-    @State private var credencial: String = ""
-    @State private var confirmacao: String = ""
+    @State private var tipoCredencial: TipoCredencial = .texto
+
+    // Estado da senha escrita
+    @State private var credencialTexto: String = ""
+    @State private var confirmacaoTexto: String = ""
+
+    // Estado do padrão de pontos
+    @State private var primeiroPadrao: [Int]?
+    @State private var padraoErro: Bool = false
+    @State private var etapaConfirmacaoPadrao: Bool = false
+
     @State private var mensagemErro: String?
     @State private var processando = false
 
@@ -39,20 +49,32 @@ public struct CriarCredencialView: View {
             .padding(.horizontal, 16)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Criar credencial principal")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(VoxColors.ink)
 
-                        Text("Use uma credencial exclusiva para este protótipo e nunca reutilize uma senha pessoal. O cabeçalho guarda apenas envelopes de chave cifrados; o formato ainda é experimental.")
-                            .font(.system(size: 16))
+                        Text("Escolha como prefere desbloquear seu cofre: digitando uma senha ou desenhando um padrão ligando os pontos.")
+                            .font(.system(size: 15))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
 
-                    VStack(spacing: 16) {
-                        VoxSecureField("Senha ou frase", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $credencial)
-                        VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacao)
+                    // Seletor de tipo de credencial
+                    Picker("Tipo de credencial", selection: $tipoCredencial) {
+                        Text(TipoCredencial.texto.titulo).tag(TipoCredencial.texto)
+                        Text(TipoCredencial.padrao.titulo).tag(TipoCredencial.padrao)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: tipoCredencial) { _, _ in
+                        limparCampos()
+                    }
+
+                    // Conteúdo conforme a escolha do usuário
+                    if tipoCredencial == .texto {
+                        secaoSenhaEscrita
+                    } else {
+                        secaoPadraoPontos
                     }
 
                     if let erro = mensagemErro {
@@ -70,21 +92,130 @@ public struct CriarCredencialView: View {
                         .accessibilityElement(children: .combine)
                     }
 
-                    Spacer(minLength: 40)
-
-                    VoxButton("Continuar", variante: .primary, isLoading: processando) {
-                        Task { await processarCriacao() }
+                    if tipoCredencial == .texto {
+                        Spacer(minLength: 24)
+                        VoxButton("Continuar", variante: .primary, isLoading: processando) {
+                            Task { await processarCriacaoTexto() }
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
             }
         }
         .background(VoxColors.canvas.ignoresSafeArea())
     }
 
+    // MARK: - Subviews
+
+    private var secaoSenhaEscrita: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Use uma senha ou frase longa de pelo menos 12 caracteres.")
+                .font(.system(size: 14))
+                .foregroundColor(VoxColors.inkSecondary)
+
+            VoxSecureField(
+                "Senha ou frase",
+                placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO",
+                texto: $credencialTexto
+            )
+            VoxSecureField(
+                "Confirme a credencial",
+                placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO",
+                texto: $confirmacaoTexto
+            )
+        }
+    }
+
+    private var secaoPadraoPontos: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 6) {
+                Text(etapaConfirmacaoPadrao ? "Confirme o padrão desenhado" : "Desenhe seu padrão de pontos")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(VoxColors.ink)
+
+                Text(etapaConfirmacaoPadrao ? "Ligue os mesmos pontos na mesma ordem para confirmar." : "Ligue pelo menos 4 pontos com o dedo.")
+                    .font(.system(size: 13))
+                    .foregroundColor(VoxColors.inkSecondary)
+            }
+
+            VoxPatternLockView(
+                isError: padraoErro,
+                isEnabled: !processando
+            ) { pontosDesenhados in
+                tratarPadraoDesenhado(pontosDesenhados)
+            }
+            .frame(maxWidth: 300, maxHeight: 300)
+            .padding(.vertical, 8)
+
+            if etapaConfirmacaoPadrao {
+                Button(action: {
+                    primeiroPadrao = nil
+                    etapaConfirmacaoPadrao = false
+                    padraoErro = false
+                    mensagemErro = nil
+                }) {
+                    Text("Recomeçar desenho")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(VoxColors.brand)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Actions
+
+    private func limparCampos() {
+        credencialTexto = ""
+        confirmacaoTexto = ""
+        primeiroPadrao = nil
+        padraoErro = false
+        etapaConfirmacaoPadrao = false
+        mensagemErro = nil
+    }
+
+    private func tratarPadraoDesenhado(_ pontos: [Int]) {
+        padraoErro = false
+        mensagemErro = nil
+
+        if !etapaConfirmacaoPadrao {
+            guard pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                padraoErro = true
+                mensagemErro = "O padrão deve ligar pelo menos 4 pontos."
+                return
+            }
+            primeiroPadrao = pontos
+            etapaConfirmacaoPadrao = true
+        } else {
+            guard let primeiro = primeiroPadrao else {
+                etapaConfirmacaoPadrao = false
+                return
+            }
+            if pontos == primeiro {
+                // Confirmação bem-sucedida!
+                let credencialStr = PadraoDesbloqueio.serializar(pontos: primeiro)
+                Task {
+                    await processarComCredenciais(credencial: credencialStr, confirmacao: credencialStr)
+                }
+            } else {
+                padraoErro = true
+                mensagemErro = "Os padrões não coincidem. Tente desenhar novamente."
+                // Reinicia para etapa inicial para garantir segurança
+                primeiroPadrao = nil
+                etapaConfirmacaoPadrao = false
+            }
+        }
+    }
+
     @MainActor
-    private func processarCriacao() async {
+    private func processarCriacaoTexto() async {
+        await processarComCredenciais(credencial: credencialTexto, confirmacao: confirmacaoTexto)
+    }
+
+    @MainActor
+    private func processarComCredenciais(credencial: String, confirmacao: String) async {
         guard !processando else { return }
         processando = true
         defer { processando = false }
@@ -94,8 +225,10 @@ public struct CriarCredencialView: View {
             onAvancarComCodigo(codigo)
         } catch let erro as VaultError {
             mensagemErro = erro.localizedDescription
+            padraoErro = true
         } catch {
             mensagemErro = "Ocorreu um erro ao definir sua credencial."
+            padraoErro = true
         }
     }
 }

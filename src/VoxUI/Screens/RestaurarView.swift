@@ -12,8 +12,12 @@ public struct RestaurarView: View {
     @State private var mostrarSeletor = false
     @State private var urlBackup: URL?
     @State private var codigoBackup = ""
+    @State private var tipoSelecionado: TipoCredencial = .texto
     @State private var novaCredencial = ""
     @State private var confirmacaoCredencial = ""
+    @State private var primeiroPadrao: [Int]?
+    @State private var etapaConfirmacaoPadrao = false
+    @State private var padraoErro = false
     @State private var restauracaoPreparada: RestauracaoPreparada?
     @State private var confirmacaoNovoCodigo = ""
     @State private var preparando = false
@@ -104,13 +108,62 @@ public struct RestaurarView: View {
             }
 
             campoSeguro("Código de recuperação do backup", placeholder: "8 caracteres por grupo", texto: $codigoBackup)
-            campoSeguro("Nova credencial (mínimo 12 caracteres)", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaCredencial)
-            campoSeguro("Confirme a nova credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoCredencial)
 
-            VoxButton("Validar e preparar restauração", icone: "checkmark.shield", isLoading: preparando) {
-                iniciarPreparacaoRestauracao()
+            Picker("Tipo de credencial", selection: $tipoSelecionado) {
+                Text(TipoCredencial.texto.titulo).tag(TipoCredencial.texto)
+                Text(TipoCredencial.padrao.titulo).tag(TipoCredencial.padrao)
             }
-            .disabled(urlBackup == nil || codigoBackup.isEmpty || novaCredencial.count < 12 || preparando)
+            .pickerStyle(.segmented)
+            .onChange(of: tipoSelecionado) { _, _ in
+                novaCredencial = ""
+                confirmacaoCredencial = ""
+                primeiroPadrao = nil
+                etapaConfirmacaoPadrao = false
+                padraoErro = false
+                erro = nil
+            }
+
+            if tipoSelecionado == .texto {
+                campoSeguro("Nova senha (mínimo 12 caracteres)", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaCredencial)
+                campoSeguro("Confirme a nova senha", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoCredencial)
+
+                VoxButton("Validar e preparar restauração", icone: "checkmark.shield", isLoading: preparando) {
+                    iniciarPreparacaoRestauracao()
+                }
+                .disabled(urlBackup == nil || codigoBackup.isEmpty || novaCredencial.count < 12 || preparando)
+            } else {
+                VStack(spacing: 12) {
+                    Text(etapaConfirmacaoPadrao ? "Confirme o novo padrão para este aparelho" : "Desenhe o novo padrão de pontos para este aparelho")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(VoxColors.ink)
+
+                    VoxPatternLockView(
+                        isError: padraoErro,
+                        isEnabled: !preparando && urlBackup != nil && !codigoBackup.isEmpty
+                    ) { pontos in
+                        tratarPadraoRestauracao(pontos)
+                    }
+                    .frame(maxWidth: 280, maxHeight: 280)
+
+                    if etapaConfirmacaoPadrao {
+                        Button("Recomeçar desenho") {
+                            primeiroPadrao = nil
+                            etapaConfirmacaoPadrao = false
+                            padraoErro = false
+                            erro = nil
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(VoxColors.brand)
+                    }
+
+                    if urlBackup == nil || codigoBackup.isEmpty {
+                        Text("Selecione o pacote de backup e informe o código antes de desenhar o padrão.")
+                            .font(.system(size: 13))
+                            .foregroundColor(VoxColors.warning)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
             if preparando {
                 Button("Cancelar restauração", role: .cancel, action: cancelarOuVoltar)
                     .font(.system(size: 14, weight: .semibold))
@@ -233,6 +286,36 @@ public struct RestaurarView: View {
                 .background(VoxColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(VoxColors.border, lineWidth: 1))
+        }
+    }
+
+    private func tratarPadraoRestauracao(_ pontos: [Int]) {
+        padraoErro = false
+        erro = nil
+        if !etapaConfirmacaoPadrao {
+            guard pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                padraoErro = true
+                erro = "O padrão deve ligar pelo menos 4 pontos."
+                return
+            }
+            primeiroPadrao = pontos
+            etapaConfirmacaoPadrao = true
+        } else {
+            guard let primeiro = primeiroPadrao else {
+                etapaConfirmacaoPadrao = false
+                return
+            }
+            if pontos == primeiro {
+                let credencialStr = PadraoDesbloqueio.serializar(pontos: primeiro)
+                novaCredencial = credencialStr
+                confirmacaoCredencial = credencialStr
+                iniciarPreparacaoRestauracao()
+            } else {
+                padraoErro = true
+                erro = "Os padrões não coincidem. Tente desenhar novamente."
+                primeiroPadrao = nil
+                etapaConfirmacaoPadrao = false
+            }
         }
     }
 

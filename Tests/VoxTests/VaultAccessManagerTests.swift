@@ -627,6 +627,101 @@ final class VaultAccessManagerTests: XCTestCase {
         XCTAssertTrue(desbloqueouComNovaCredencial, "Aparelho B deve desbloquear com sua nova credencial")
     }
 
+    func testPatternLockSerializationAndValidation() {
+        let pontos = [0, 1, 4, 7, 8]
+        let serializado = PadraoDesbloqueio.serializar(pontos: pontos)
+        XCTAssertEqual(serializado, "padrao:0-1-4-7-8")
+        XCTAssertTrue(PadraoDesbloqueio.ehPadrao(credencial: serializado))
+        XCTAssertEqual(PadraoDesbloqueio.tipo(de: serializado), .padrao)
+        XCTAssertEqual(PadraoDesbloqueio.deserializar(credencial: serializado), pontos)
+
+        // Padrão inválido (fora do intervalo 0...8 ou repetido)
+        XCTAssertNil(PadraoDesbloqueio.deserializar(credencial: "padrao:0-1-9"))
+        XCTAssertNil(PadraoDesbloqueio.deserializar(credencial: "padrao:0-1-1"))
+        XCTAssertNil(PadraoDesbloqueio.deserializar(credencial: "senha-normal"))
+        XCTAssertEqual(PadraoDesbloqueio.tipo(de: "senha-normal-longa"), .texto)
+    }
+
+    func testPatternCredentialSetupLockAndUnlock() async throws {
+        // 1. Configurar com padrão de 4 pontos
+        let padrao = [0, 1, 2, 5]
+        let credencialPadrao = PadraoDesbloqueio.serializar(pontos: padrao)
+        let code = try await manager.configurarCofre(credencial: credencialPadrao, confirmacao: credencialPadrao)
+        try await manager.confirmarCodigoRecuperacao(trechoDigitado: String(code.suffix(8)))
+
+        XCTAssertTrue(manager.isConfigurado)
+        XCTAssertEqual(manager.estadoAcesso, .desbloqueado)
+        XCTAssertEqual(manager.tipoCredencialConfigurada, .padrao)
+
+        // 2. Bloquear cofre
+        manager.bloquearCofre()
+        XCTAssertEqual(manager.estadoAcesso, .bloqueado)
+
+        // 3. Tentar desbloquear com padrão incorreto -> deve falhar fechado
+        let padraoIncorreto = PadraoDesbloqueio.serializar(pontos: [0, 1, 2, 4])
+        let sucessoIncorreto = await manager.desbloquearComCredencial(padraoIncorreto)
+        XCTAssertFalse(sucessoIncorreto)
+        XCTAssertEqual(manager.estadoAcesso, .bloqueado)
+
+        // 4. Desbloquear com o padrão correto -> sucesso
+        let sucessoCorreto = await manager.desbloquearComCredencial(credencialPadrao)
+        XCTAssertTrue(sucessoCorreto)
+        XCTAssertEqual(manager.estadoAcesso, .desbloqueado)
+        XCTAssertEqual(manager.tipoCredencialConfigurada, .padrao)
+    }
+
+    func testPatternTooShortRejected() async throws {
+        // Padrão com menos de 4 pontos deve ser rejeitado
+        let padraoCurto = PadraoDesbloqueio.serializar(pontos: [0, 1, 2])
+        do {
+            _ = try await manager.configurarCofre(credencial: padraoCurto, confirmacao: padraoCurto)
+            XCTFail("Padrão com menos de 4 pontos deve ser rejeitado")
+        } catch let error as VaultError {
+            XCTAssertEqual(error, .padraoMuitoCurto)
+        }
+    }
+
+    func testPatternCredentialSwitchToPasswordAndViceVersa() async throws {
+        // Começar com senha escrita
+        let senhaInicial = credencialAmbientePadrao()
+        let code = try await configureVault(senhaInicial)
+        XCTAssertEqual(manager.tipoCredencialConfigurada, .texto)
+
+        // Trocar de senha escrita para padrão de pontos
+        let novoPadrao = PadraoDesbloqueio.serializar(pontos: [1, 4, 7, 8, 5])
+        try await manager.redefinirCredencialComCodigo(
+            codigo: code,
+            novaCredencial: novoPadrao,
+            confirmacao: novoPadrao
+        )
+        XCTAssertEqual(manager.estadoAcesso, .desbloqueado)
+        XCTAssertEqual(manager.tipoCredencialConfigurada, .padrao)
+
+        // Bloquear e desbloquear com o novo padrão
+        manager.bloquearCofre()
+        let desbloqueouComSenhaAntiga = await manager.desbloquearComCredencial(senhaInicial)
+        XCTAssertFalse(desbloqueouComSenhaAntiga, "Senha antiga não deve mais funcionar")
+
+        let desbloqueouComPadrao = await manager.desbloquearComCredencial(novoPadrao)
+        XCTAssertTrue(desbloqueouComPadrao, "Novo padrão deve desbloquear")
+
+        // Trocar de volta para uma nova senha escrita
+        let outraSenha = credencialAmbiente("PADRAO_DESBLOQUEIO_NOVA", indicativo: "PADRAO_DESBLOQUEIO_NOVA")
+        try await manager.redefinirCredencialComCodigo(
+            codigo: code,
+            novaCredencial: outraSenha,
+            confirmacao: outraSenha
+        )
+        XCTAssertEqual(manager.tipoCredencialConfigurada, .texto)
+
+        manager.bloquearCofre()
+        let desbloqueouComPadraoDepois = await manager.desbloquearComCredencial(novoPadrao)
+        XCTAssertFalse(desbloqueouComPadraoDepois, "Padrão não deve mais funcionar após troca para senha escrita")
+
+        let desbloqueouComOutraSenha = await manager.desbloquearComCredencial(outraSenha)
+        XCTAssertTrue(desbloqueouComOutraSenha, "Nova senha escrita deve desbloquear")
+    }
+
 
     private func backupPackageBytes(at directory: URL) throws -> [String: Data] {
         let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]))

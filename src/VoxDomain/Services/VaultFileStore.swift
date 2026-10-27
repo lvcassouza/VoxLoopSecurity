@@ -20,6 +20,7 @@ actor VaultFileStore {
         var recoverySalt: Data
         var passwordEnvelope: VaultCrypto.SealedValue
         var recoveryEnvelope: VaultCrypto.SealedValue
+        var credentialType: String?
     }
 
     private struct Record: Codable, Sendable {
@@ -163,7 +164,8 @@ actor VaultFileStore {
             passwordSalt: passwordSalt,
             recoverySalt: recoverySalt,
             passwordEnvelope: try VaultCrypto.seal(key, key: masterKey, authenticating: Data("vox.header.password.v1".utf8)),
-            recoveryEnvelope: try VaultCrypto.seal(key, key: recoveryKey, authenticating: Data("vox.header.recovery.v1".utf8))
+            recoveryEnvelope: try VaultCrypto.seal(key, key: recoveryKey, authenticating: Data("vox.header.recovery.v1".utf8)),
+            credentialType: PadraoDesbloqueio.tipo(de: passphrase).rawValue
         )
         pendingSetup = PendingSetup(header: header, key: key, code: code.display)
         return code.display
@@ -226,7 +228,7 @@ actor VaultFileStore {
     }
 
     func recover(code: String, newPassphrase: String, confirmation: String) throws -> [ItemDoCofre] {
-        guard newPassphrase.count >= 12 else { throw VaultError.credencialMuitoCurta }
+        try validarPassphrase(newPassphrase)
         guard newPassphrase == confirmation else { throw VaultError.credenciaisNaoCoincidem }
         guard var secret = VaultCrypto.recoverySecret(from: code) else { throw VaultError.codigoRecuperacaoInvalido }
         defer { secret.resetBytes(in: 0..<secret.count) }
@@ -245,6 +247,7 @@ actor VaultFileStore {
         try openIndexAndRecover(with: key)
         header.passwordSalt = newSalt
         header.passwordEnvelope = try VaultCrypto.seal(key, key: newMaster, authenticating: Data("vox.header.password.v1".utf8))
+        header.credentialType = PadraoDesbloqueio.tipo(de: newPassphrase).rawValue
         try Self.writeJSON(header, to: headerURL)
         vaultKey = key
         return records.map(\.item)
@@ -473,7 +476,7 @@ actor VaultFileStore {
     ) throws -> RestauracaoPreparada {
         guard pendingRestore == nil else { throw VaultError.operacaoInterrompida }
         guard !FileManager.default.fileExists(atPath: rootURL.path) else { throw VaultError.cofreNaoVazioParaRestauracao }
-        guard newPassphrase.count >= 12 else { throw VaultError.credencialMuitoCurta }
+        try validarPassphrase(newPassphrase)
         guard newPassphrase == confirmation else { throw VaultError.credenciaisNaoCoincidem }
         guard var secret = VaultCrypto.recoverySecret(from: recoveryCode) else { throw VaultError.codigoRecuperacaoInvalido }
         defer { secret.resetBytes(in: 0..<secret.count) }
@@ -523,6 +526,7 @@ actor VaultFileStore {
                     key: newRecoveryKey,
                     authenticating: Data("vox.header.recovery.v1".utf8)
                 )
+                restoredHeader.credentialType = PadraoDesbloqueio.tipo(de: newPassphrase).rawValue
 
                 try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true)
                 try FileManager.default.createDirectory(at: stagingURL.appendingPathComponent("items", isDirectory: true), withIntermediateDirectories: true)
@@ -744,7 +748,26 @@ actor VaultFileStore {
         try output.write(contentsOf: sealed.tag)
     }
 
-    // MARK: - Encoded metadata and filesystem helpers
+    func obterTipoCredencial() -> TipoCredencial {
+        guard let header = try? readHeader() else { return .texto }
+        if let typeStr = header.credentialType, let tipo = TipoCredencial(rawValue: typeStr) {
+            return tipo
+        }
+        return .texto
+    }
+
+    private func validarPassphrase(_ passphrase: String) throws {
+        if PadraoDesbloqueio.ehPadrao(credencial: passphrase) {
+            guard let pontos = PadraoDesbloqueio.deserializar(credencial: passphrase),
+                  pontos.count >= PadraoDesbloqueio.minimoPontos else {
+                throw VaultError.padraoMuitoCurto
+            }
+        } else {
+            guard passphrase.count >= 12 else {
+                throw VaultError.credencialMuitoCurta
+            }
+        }
+    }
 
     private func readHeader() throws -> Header {
         try readHeader(at: headerURL)
