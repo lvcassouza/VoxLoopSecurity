@@ -49,7 +49,7 @@ public struct BoasVindasView: View {
                     onCriarCofre()
                 }
 
-                VoxButton("Restaurar de backup (indisponível)", variante: .secondary) {
+                VoxButton("Restaurar de backup", variante: .secondary) {
                     onRestaurarBackup()
                 }
 

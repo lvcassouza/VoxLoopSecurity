@@ -84,8 +84,8 @@ public struct PerdiAcessoView: View {
                         // Formulário de redefinição com o código
                         VStack(spacing: 16) {
                             VoxTextField("Código de recuperação", placeholder: "8 caracteres por grupo", texto: $codigoRecuperacao)
-                            VoxSecureField("Nova credencial de teste", placeholder: "Mínimo 12 caracteres", texto: $novaSenha)
-                            VoxSecureField("Confirme a credencial", placeholder: "Repita a credencial", texto: $confirmacaoSenha)
+                            VoxSecureField("Nova credencial de teste", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
+                            VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacaoSenha)
                         }
 
                         if let erro = mensagemErro {

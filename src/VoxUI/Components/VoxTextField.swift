@@ -8,7 +8,11 @@ public struct VoxSecureField: View {
     @Binding public var texto: String
     @State private var isVisivel: Bool = false
 
-    public init(_ rotulo: String, placeholder: String, texto: Binding<String>) {
+    public init(
+        _ rotulo: String,
+        placeholder: String = ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO",
+        texto: Binding<String>
+    ) {
         self.rotulo = rotulo
         self.placeholder = placeholder
         self._texto = texto

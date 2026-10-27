@@ -51,8 +51,8 @@ public struct CriarCredencialView: View {
                     }
 
                     VStack(spacing: 16) {
-                        VoxSecureField("Senha ou frase", placeholder: "Digite sua credencial", texto: $credencial)
-                        VoxSecureField("Confirme a credencial", placeholder: "Repita a credencial", texto: $confirmacao)
+                        VoxSecureField("Senha ou frase", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $credencial)
+                        VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacao)
                     }
 
                     if let erro = mensagemErro {

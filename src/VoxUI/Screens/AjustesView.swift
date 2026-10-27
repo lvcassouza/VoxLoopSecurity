@@ -207,8 +207,8 @@ struct TrocarCredencialSheet: View {
                     .foregroundColor(VoxColors.inkSecondary)
 
                 VoxTextField("Código de recuperação", placeholder: "8 caracteres por grupo", texto: $codigoConfirmacao)
-                VoxSecureField("Nova credencial de teste", placeholder: "Mínimo 12 caracteres", texto: $novaSenha)
-                VoxSecureField("Confirme a credencial", placeholder: "Repita a credencial", texto: $confirmacao)
+                VoxSecureField("Nova credencial de teste", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $novaSenha)
+                VoxSecureField("Confirme a credencial", placeholder: ProcessInfo.processInfo.environment["PADRAO_DESBLOQUEIO"] ?? "PADRAO_DESBLOQUEIO", texto: $confirmacao)
 
                 if let erro {
                     Text(erro)
