@@ -23,9 +23,12 @@ public enum VaultError: LocalizedError, Equatable, Sendable {
     case formatoDeMidiaNaoSuportado
     case formatoCofreIncompativel
     case cofreBloqueado
+    case nomeCofreInvalido
 
     public var errorDescription: String? {
         switch self {
+        case .nomeCofreInvalido:
+            return "O nome do cofre deve conter entre 1 e 50 caracteres."
         case .credenciaisNaoCoincidem:
             return "As credenciais informadas não coincidem."
         case .credencialMuitoCurta:

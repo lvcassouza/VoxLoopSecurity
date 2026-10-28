@@ -11,7 +11,8 @@ Nome curto do aplicativo de cofre privado.
 Marca do site e identidade responsável pelo aplicativo Vox.
 
 **Cofre**:
-Coleção privada de itens que a pessoa escolheu guardar no aplicativo.
+Coleção privada de itens que a pessoa escolheu guardar no aplicativo. O aplicativo suporta múltiplos cofres locais independentes, cada um com sua própria credencial e isolamento criptográfico estrito.
+_Evitar_: pasta, conta, perfil na nuvem.
 
 **Arquivo de origem**:
 Foto, vídeo ou arquivo selecionado para importação, que continua no local de onde foi escolhido após a importação.

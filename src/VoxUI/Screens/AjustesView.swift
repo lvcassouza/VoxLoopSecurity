@@ -8,24 +8,48 @@ import VoxDomain
 public struct AjustesView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onBloquearManualmente: () -> Void
+    public let onCriarNovoCofre: () -> Void
 
     @State private var mostrarTrocarCredencial: Bool = false
     @State private var mostrarNovoCodigo: Bool = false
     @State private var mostrarDiagnosticoHardware: Bool = false
     @State private var mostrarConfirmacaoApagarCofre: Bool = false
+    @State private var mostrarSeletorCofres: Bool = false
     @State private var textoConfirmacaoDigitado: String = ""
 
     public init(
         accessManager: VaultAccessManager,
-        onBloquearManualmente: @escaping () -> Void
+        onBloquearManualmente: @escaping () -> Void,
+        onCriarNovoCofre: @escaping () -> Void = {}
     ) {
         self.accessManager = accessManager
         self.onBloquearManualmente = onBloquearManualmente
+        self.onCriarNovoCofre = onCriarNovoCofre
     }
 
     public var body: some View {
         NavigationStack {
             List {
+                // 0. Cofre atual e gerenciador de cofres
+                Section("Cofre Atual") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(accessManager.cofreAtivo?.nome ?? "Cofre Principal")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(VoxColors.ink)
+                            Text("Credencial: \(accessManager.tipoCredencialConfigurada.titulo)")
+                                .font(.system(size: 13))
+                                .foregroundColor(VoxColors.inkSecondary)
+                        }
+                        Spacer()
+                    }
+
+                    Button("Alternar ou criar novo cofre") {
+                        mostrarSeletorCofres = true
+                    }
+                    .foregroundColor(VoxColors.brand)
+                }
+
                 // 1. Desbloqueio
                 Section("Desbloqueio") {
                     LabeledContent("Biometria", value: "Ainda não disponível")
@@ -145,6 +169,11 @@ public struct AjustesView: View {
             }
             .sheet(isPresented: $mostrarDiagnosticoHardware) {
                 DiagnosticoHardwareView()
+            }
+            .sheet(isPresented: $mostrarSeletorCofres) {
+                SeletorCofresSheet(accessManager: accessManager) {
+                    onCriarNovoCofre()
+                }
             }
             .confirmationDialog(
                 "Apagar o cofre local?",

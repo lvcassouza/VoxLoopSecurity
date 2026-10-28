@@ -9,6 +9,7 @@ public struct CofrePrincipalView: View {
     public let onAbrirItem: (ItemDoCofre) -> Void
     public let onAbrirAjustes: () -> Void
     public let onAbrirBackup: () -> Void
+    public let onCriarNovoCofre: () -> Void
 
     @State private var modoSelecao: Bool = false
     @State private var itensSelecionados: Set<UUID> = []
@@ -16,6 +17,7 @@ public struct CofrePrincipalView: View {
     @State private var mostrarConfirmacaoExclusao: Bool = false
     @State private var mostrarConfirmacaoExportacao: Bool = false
     @State private var mostrarSeletorExportacao: Bool = false
+    @State private var mostrarSeletorCofres: Bool = false
     @State private var loteExportacao: LoteExportacaoPreparado?
     @State private var arquivosExportados: [ExportedVaultFile] = []
     @State private var preparandoExportacao = false
@@ -34,12 +36,14 @@ public struct CofrePrincipalView: View {
         accessManager: VaultAccessManager,
         onAbrirItem: @escaping (ItemDoCofre) -> Void,
         onAbrirAjustes: @escaping () -> Void,
-        onAbrirBackup: @escaping () -> Void
+        onAbrirBackup: @escaping () -> Void,
+        onCriarNovoCofre: @escaping () -> Void = {}
     ) {
         self.accessManager = accessManager
         self.onAbrirItem = onAbrirItem
         self.onAbrirAjustes = onAbrirAjustes
         self.onAbrirBackup = onAbrirBackup
+        self.onCriarNovoCofre = onCriarNovoCofre
     }
 
     public var body: some View {
@@ -212,7 +216,7 @@ public struct CofrePrincipalView: View {
                 }
             }
             .background(VoxColors.canvas.ignoresSafeArea())
-            .navigationTitle("Cofre")
+            .navigationTitle(accessManager.cofreAtivo?.nome ?? "Cofre")
             #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -226,6 +230,11 @@ public struct CofrePrincipalView: View {
                 }
 
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button(action: { mostrarSeletorCofres = true }) {
+                        Image(systemName: "rectangle.stack")
+                            .foregroundColor(VoxColors.ink)
+                    }
+
                     Button(action: { exibirCampoBusca.toggle() }) {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(VoxColors.ink)
@@ -250,6 +259,11 @@ public struct CofrePrincipalView: View {
                 }
 
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button(action: { mostrarSeletorCofres = true }) {
+                        Image(systemName: "rectangle.stack")
+                            .foregroundColor(VoxColors.ink)
+                    }
+
                     Button(action: { exibirCampoBusca.toggle() }) {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(VoxColors.ink)
@@ -262,6 +276,11 @@ public struct CofrePrincipalView: View {
                 }
             }
             #endif
+            .sheet(isPresented: $mostrarSeletorCofres) {
+                SeletorCofresSheet(accessManager: accessManager) {
+                    onCriarNovoCofre()
+                }
+            }
             .sheet(isPresented: $mostrarFolhaImportacao) {
                 FolhaImportacaoSinteticaView(accessManager: accessManager)
             }

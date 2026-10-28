@@ -9,37 +9,55 @@ import VoxDomain
 public struct TelaBloqueadaView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onPerdiAcesso: () -> Void
+    public let onCriarNovoCofre: (() -> Void)?
 
     @State private var modoEntrada: TipoCredencial = .texto
     @State private var credencialDigitada: String = ""
     @State private var erroAutenticacao: Bool = false
     @State private var padraoErro: Bool = false
     @State private var processando: Bool = false
+    @State private var mostrarSeletorCofres: Bool = false
 
     public init(
         accessManager: VaultAccessManager,
-        onPerdiAcesso: @escaping () -> Void
+        onPerdiAcesso: @escaping () -> Void,
+        onCriarNovoCofre: (() -> Void)? = nil
     ) {
         self.accessManager = accessManager
         self.onPerdiAcesso = onPerdiAcesso
+        self.onCriarNovoCofre = onCriarNovoCofre
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 16)
 
-            VStack(spacing: 20) {
-                VoxLogoView(size: modoEntrada == .padrao ? 64 : 80)
+            VStack(spacing: 16) {
+                VoxLogoView(size: modoEntrada == .padrao ? 60 : 76)
 
                 VStack(spacing: 6) {
-                    Text("Cofre bloqueado")
+                    Text(accessManager.cofreAtivo?.nome ?? "Cofre bloqueado")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundColor(VoxColors.ink)
 
-                    Text(modoEntrada == .padrao ? "Desenhe o padrão para abrir o cofre local" : "Digite sua credencial para abrir o cofre local")
+                    Text(modoEntrada == .padrao ? "Desenhe o padrão para abrir este cofre" : "Digite sua credencial para abrir este cofre")
                         .font(.system(size: 14))
                         .foregroundColor(VoxColors.inkSecondary)
                         .multilineTextAlignment(.center)
+                }
+
+                // Botão para alternar entre múltiplos cofres ou abrir gerenciador
+                Button(action: { mostrarSeletorCofres = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder.badge.gearshape")
+                        Text(accessManager.listaCofres.count > 1 ? "Trocar de cofre (\(accessManager.listaCofres.count))" : "Meus cofres")
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(VoxColors.brand)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(VoxColors.brandSoft)
+                    .clipShape(Capsule())
                 }
             }
             .padding(.horizontal, 24)
@@ -78,6 +96,11 @@ public struct TelaBloqueadaView: View {
             .padding(.bottom, 24)
         }
         .background(VoxColors.canvas.ignoresSafeArea())
+        .sheet(isPresented: $mostrarSeletorCofres) {
+            SeletorCofresSheet(accessManager: accessManager) {
+                onCriarNovoCofre?()
+            }
+        }
         .onAppear {
             modoEntrada = accessManager.tipoCredencialConfigurada
         }

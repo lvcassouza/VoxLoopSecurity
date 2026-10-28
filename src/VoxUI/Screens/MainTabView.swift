@@ -13,6 +13,7 @@ public enum DestinoAba: Hashable {
 public struct MainTabView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onBloquearManualmente: () -> Void
+    public let onCriarNovoCofre: () -> Void
 
     @State private var abaSelecionada: DestinoAba = .cofre
     @State private var itemDetalheAberto: ItemDoCofre?
@@ -20,10 +21,12 @@ public struct MainTabView: View {
 
     public init(
         accessManager: VaultAccessManager,
-        onBloquearManualmente: @escaping () -> Void
+        onBloquearManualmente: @escaping () -> Void,
+        onCriarNovoCofre: @escaping () -> Void = {}
     ) {
         self.accessManager = accessManager
         self.onBloquearManualmente = onBloquearManualmente
+        self.onCriarNovoCofre = onCriarNovoCofre
     }
 
     public var body: some View {
@@ -38,7 +41,8 @@ public struct MainTabView: View {
                 },
                 onAbrirBackup: {
                     abaSelecionada = .backup
-                }
+                },
+                onCriarNovoCofre: onCriarNovoCofre
             )
             .tabItem {
                 Label("Cofre", systemImage: "square.grid.2x2")
@@ -58,7 +62,8 @@ public struct MainTabView: View {
 
             AjustesView(
                 accessManager: accessManager,
-                onBloquearManualmente: onBloquearManualmente
+                onBloquearManualmente: onBloquearManualmente,
+                onCriarNovoCofre: onCriarNovoCofre
             )
             .tabItem {
                 Label("Ajustes", systemImage: "gearshape")

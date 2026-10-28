@@ -110,6 +110,9 @@ public struct AppRootView: View {
                         accessManager: accessManager,
                         onPerdiAcesso: {
                             accessManager.iniciarRecuperacao()
+                        },
+                        onCriarNovoCofre: {
+                            onboardingAtivo = .criarCofre
                         }
                     )
 
@@ -118,6 +121,9 @@ public struct AppRootView: View {
                         accessManager: accessManager,
                         onBloquearManualmente: {
                             accessManager.bloquearCofre()
+                        },
+                        onCriarNovoCofre: {
+                            onboardingAtivo = .criarCofre
                         }
                     )
 

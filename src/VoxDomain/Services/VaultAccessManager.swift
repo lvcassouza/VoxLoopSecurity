@@ -19,7 +19,15 @@ public final class VaultAccessManager: ObservableObject {
     @Published public private(set) var erroAcesso: String?
     @Published public private(set) var tipoCredencialConfigurada: TipoCredencial = .texto
 
-    private let store: VaultFileStore
+    // Múltiplos cofres locais independentes
+    @Published public private(set) var listaCofres: [DescritorCofre] = []
+    @Published public private(set) var cofreAtivo: DescritorCofre?
+
+    private var store: VaultFileStore
+    private let registry: VaultRegistry?
+    private let isDirectStorageMode: Bool
+    private var pendingSetupStore: VaultFileStore?
+    private var pendingSetupDescriptor: DescritorCofre?
     private var bloqueioEmAndamento: Task<Void, Never>?
     private var sessionEpoch: UInt64 = 0
     private var mediaReadSessions: [UUID: VaultMediaReadSession] = [:]
@@ -40,27 +48,115 @@ public final class VaultAccessManager: ObservableObject {
         return base.appendingPathComponent("VoxVault", isDirectory: true)
     }
 
+    public static func diretorioBaseMultiCofre() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("VoxVaults", isDirectory: true)
+    }
+
     public init(
         itensIniciais: [ItemDoCofre] = [],
         configuradoInicial: Bool = false,
-        storageDirectory: URL? = nil
+        storageDirectory: URL? = nil,
+        multiVaultDirectory: URL? = nil
     ) {
-        let directory = storageDirectory ?? Self.diretorioDoCofrePadrao()
-        self.store = VaultFileStore(rootURL: directory)
-        let exists = FileManager.default.fileExists(atPath: directory.appendingPathComponent("vault.header").path)
-        self.isConfigurado = exists
-        self.estadoAcesso = exists ? .bloqueado : .naoConfigurado
+        if let storageDirectory {
+            self.isDirectStorageMode = true
+            self.registry = nil
+            self.store = VaultFileStore(rootURL: storageDirectory)
+            let exists = FileManager.default.fileExists(atPath: storageDirectory.appendingPathComponent("vault.header").path)
+            self.isConfigurado = exists
+            self.estadoAcesso = exists ? .bloqueado : .naoConfigurado
+            if exists {
+                let desc = DescritorCofre(nome: "Cofre de Teste", tipoCredencial: .texto)
+                self.listaCofres = [desc]
+                self.cofreAtivo = desc
+            }
+            Self.limparRestauracoesAbandonadas(aoLadoDe: storageDirectory)
+        } else {
+            self.isDirectStorageMode = false
+            let baseDir = multiVaultDirectory ?? Self.diretorioBaseMultiCofre()
+            let reg = VaultRegistry(baseDirectory: baseDir)
+            self.registry = reg
+
+            // Leitura síncrona do manifesto local
+            let manifestoSync = Self.carregarManifestoSync(baseDir: baseDir)
+            self.listaCofres = manifestoSync.cofres
+
+            let ativo: DescritorCofre?
+            if let ativoID = manifestoSync.idCofreAtivo,
+               let encontrado = manifestoSync.cofres.first(where: { $0.id == ativoID }) {
+                ativo = encontrado
+            } else {
+                ativo = manifestoSync.cofres.first
+            }
+            self.cofreAtivo = ativo
+
+            if let ativo {
+                let dir = baseDir.appendingPathComponent("vaults").appendingPathComponent(ativo.id.uuidString)
+                self.store = VaultFileStore(rootURL: dir)
+                self.isConfigurado = true
+                self.estadoAcesso = .bloqueado
+                self.tipoCredencialConfigurada = ativo.tipoCredencial
+            } else {
+                self.store = VaultFileStore(rootURL: Self.diretorioDoCofrePadrao())
+                self.isConfigurado = false
+                self.estadoAcesso = .naoConfigurado
+            }
+
+            Self.limparRestauracoesAbandonadas(aoLadoDe: baseDir)
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.sincronizarRegistroMultiCofre()
+            }
+        }
+
         Self.limparExportacoesAbandonadas()
         Self.limparBackupsAbandonados()
-        Self.limparRestauracoesAbandonadas(aoLadoDe: directory)
-        // Keep the source-compatible arguments, but never trust caller-supplied access state.
         _ = configuradoInicial
-        self.itens = exists ? [] : itensIniciais
-        if exists {
+        self.itens = isConfigurado ? [] : itensIniciais
+        if isConfigurado {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.tipoCredencialConfigurada = await self.store.obterTipoCredencial()
             }
+        }
+    }
+
+    private static func carregarManifestoSync(baseDir: URL) -> ManifestCofres {
+        let manifestURL = baseDir.appendingPathComponent("vaults-manifest.json")
+        guard FileManager.default.fileExists(atPath: manifestURL.path),
+              let data = try? Data(contentsOf: manifestURL),
+              let decoded = try? JSONDecoder().decode(ManifestCofres.self, from: data) else {
+            return ManifestCofres()
+        }
+        return decoded
+    }
+
+    private func sincronizarRegistroMultiCofre() async {
+        guard let registry else { return }
+        try? await registry.migrarCofreLegadoSeNecessario(legadoURL: Self.diretorioDoCofrePadrao())
+        let cofres = (try? await registry.listarCofres()) ?? []
+        self.listaCofres = cofres
+
+        let ativoID = try? await registry.obterCofreAtivoID()
+        if let ativoID, let encontrado = cofres.first(where: { $0.id == ativoID }) {
+            self.cofreAtivo = encontrado
+        } else {
+            self.cofreAtivo = cofres.first
+        }
+
+        if let cofreAtivo {
+            let dir = await registry.diretorioDoCofre(id: cofreAtivo.id)
+            self.store = VaultFileStore(rootURL: dir)
+            self.tipoCredencialConfigurada = await self.store.obterTipoCredencial()
+            self.isConfigurado = true
+            if self.estadoAcesso != .desbloqueado {
+                self.estadoAcesso = .bloqueado
+            }
+        } else {
+            self.isConfigurado = false
+            self.estadoAcesso = .naoConfigurado
         }
     }
 
@@ -80,30 +176,86 @@ public final class VaultAccessManager: ObservableObject {
     }
 
     public func configurarCofre(credencial: String, confirmacao: String) async throws -> String {
+        try await criarNovoCofre(nome: "Cofre Principal", credencial: credencial, confirmacao: confirmacao)
+    }
+
+    public func configurarCofre(nome: String, credencial: String, confirmacao: String) async throws -> String {
+        try await criarNovoCofre(nome: nome, credencial: credencial, confirmacao: confirmacao)
+    }
+
+    public func criarNovoCofre(
+        nome: String = "Meu Cofre",
+        credencial: String,
+        confirmacao: String
+    ) async throws -> String {
+        let nomeLimpo = nome.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !nomeLimpo.isEmpty && nomeLimpo.count <= 50 else {
+            throw VaultError.nomeCofreInvalido
+        }
         try validarCredencial(credencial)
         guard credencial == confirmacao else { throw VaultError.credenciaisNaoCoincidem }
-        guard !isConfigurado else { throw VaultError.cofreJaConfigurado }
         erroAcesso = nil
         let epoch = sessionEpoch
-        let code = try await store.prepareVault(passphrase: credencial)
-        guard epoch == sessionEpoch, !isConfigurado else {
-            await store.cancelPendingSetup()
-            throw VaultError.operacaoInterrompida
+        let tipo = PadraoDesbloqueio.tipo(de: credencial)
+
+        if isDirectStorageMode {
+            guard !isConfigurado else { throw VaultError.cofreJaConfigurado }
+            let code = try await store.prepareVault(passphrase: credencial)
+            guard epoch == sessionEpoch else {
+                await store.cancelPendingSetup()
+                throw VaultError.operacaoInterrompida
+            }
+            let desc = DescritorCofre(nome: nomeLimpo, tipoCredencial: tipo)
+            self.pendingSetupDescriptor = desc
+            self.codigoRecuperacaoPendente = code
+            return code
+        } else {
+            guard let registry else { throw VaultError.operacaoInterrompida }
+            let newID = UUID()
+            let newDir = await registry.diretorioDoCofre(id: newID)
+            let newStore = VaultFileStore(rootURL: newDir)
+            let code = try await newStore.prepareVault(passphrase: credencial)
+            guard epoch == sessionEpoch else {
+                await newStore.cancelPendingSetup()
+                throw VaultError.operacaoInterrompida
+            }
+            self.pendingSetupStore = newStore
+            self.pendingSetupDescriptor = DescritorCofre(id: newID, nome: nomeLimpo, tipoCredencial: tipo)
+            self.codigoRecuperacaoPendente = code
+            return code
         }
-        codigoRecuperacaoPendente = code
-        return code
     }
 
     public func confirmarCodigoRecuperacao(trechoDigitado: String) async throws {
-        guard let pending = codigoRecuperacaoPendente else { throw VaultError.codigoRecuperacaoInvalido }
+        guard let pending = codigoRecuperacaoPendente,
+              let descritor = pendingSetupDescriptor else {
+            throw VaultError.codigoRecuperacaoInvalido
+        }
         let entered = Self.normalizeRecoveryCode(trechoDigitado)
         let full = Self.normalizeRecoveryCode(pending)
         let lastGroup = String(full.suffix(8))
         guard entered == full || entered == lastGroup else { throw VaultError.confirmacaoInvalida }
-        try await store.confirmSetup(code: trechoDigitado)
+
+        if isDirectStorageMode {
+            try await store.confirmSetup(code: trechoDigitado)
+            self.listaCofres = [descritor]
+            self.cofreAtivo = descritor
+        } else {
+            guard let setupStore = pendingSetupStore, let registry else {
+                throw VaultError.operacaoInterrompida
+            }
+            try await setupStore.confirmSetup(code: trechoDigitado)
+            self.store = setupStore
+            try await registry.registrarCofre(descritor, tornarAtivo: true)
+            self.listaCofres = (try? await registry.listarCofres()) ?? [descritor]
+            self.cofreAtivo = descritor
+        }
+
         codigoRecuperacaoPendente = nil
+        pendingSetupDescriptor = nil
+        pendingSetupStore = nil
         isConfigurado = true
-        tipoCredencialConfigurada = await store.obterTipoCredencial()
+        tipoCredencialConfigurada = descritor.tipoCredencial
         estadoAcesso = .desbloqueado
         tentativasFalhas = 0
         erroAcesso = nil
@@ -112,8 +264,82 @@ public final class VaultAccessManager: ObservableObject {
 
     public func cancelarConfiguracao() async {
         sessionEpoch &+= 1
-        await store.cancelPendingSetup()
+        if isDirectStorageMode {
+            await store.cancelPendingSetup()
+        } else {
+            if let pendingSetupStore {
+                await pendingSetupStore.cancelPendingSetup()
+            }
+        }
+        pendingSetupStore = nil
+        pendingSetupDescriptor = nil
         codigoRecuperacaoPendente = nil
+    }
+
+    // MARK: - Gerenciamento de múltiplos cofres
+
+    public func selecionarCofre(id: UUID) async {
+        guard let selecionado = listaCofres.first(where: { $0.id == id }) else { return }
+        invalidarConteudoTransitório()
+        await store.lock()
+        itens.removeAll(keepingCapacity: false)
+        tentativasFalhas = 0
+        erroAcesso = nil
+
+        cofreAtivo = selecionado
+        tipoCredencialConfigurada = selecionado.tipoCredencial
+        if !isDirectStorageMode, let registry {
+            let dir = await registry.diretorioDoCofre(id: id)
+            self.store = VaultFileStore(rootURL: dir)
+            try? await registry.definirCofreAtivo(id: id)
+            try? await registry.atualizarUltimoAcesso(id: id)
+        }
+        estadoAcesso = .bloqueado
+    }
+
+    public func renomearCofre(id: UUID, novoNome: String) async throws {
+        let limpo = novoNome.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !limpo.isEmpty && limpo.count <= 50 else {
+            throw VaultError.nomeCofreInvalido
+        }
+        if let idx = listaCofres.firstIndex(where: { $0.id == id }) {
+            listaCofres[idx].nome = limpo
+        }
+        if cofreAtivo?.id == id {
+            cofreAtivo?.nome = limpo
+        }
+        if let registry {
+            try? await registry.atualizarNomeCofre(id: id, novoNome: limpo)
+        }
+    }
+
+    public func apagarCofre(id: UUID) async {
+        invalidarConteudoTransitório()
+        if cofreAtivo?.id == id {
+            await store.lock()
+            try? await store.eraseVault()
+            itens.removeAll(keepingCapacity: false)
+        }
+        if let registry {
+            try? await registry.removerCofre(id: id)
+            listaCofres = (try? await registry.listarCofres()) ?? []
+            if cofreAtivo?.id == id {
+                cofreAtivo = listaCofres.first
+                if let novoAtivo = cofreAtivo {
+                    let dir = await registry.diretorioDoCofre(id: novoAtivo.id)
+                    store = VaultFileStore(rootURL: dir)
+                    tipoCredencialConfigurada = novoAtivo.tipoCredencial
+                    estadoAcesso = .bloqueado
+                    isConfigurado = true
+                } else {
+                    isConfigurado = false
+                    estadoAcesso = .naoConfigurado
+                    cofreAtivo = nil
+                }
+            }
+        } else {
+            await apagarCofreInacessivel()
+        }
     }
 
     /// The face/Touch ID flow is intentionally unavailable until the keychain envelope is implemented.
@@ -138,6 +364,9 @@ public final class VaultAccessManager: ObservableObject {
             estadoAcesso = .desbloqueado
             tentativasFalhas = 0
             erroAcesso = nil
+            if let cofreAtivo, let registry {
+                try? await registry.atualizarUltimoAcesso(id: cofreAtivo.id)
+            }
             await updateBackupStateAfterUnlock()
             SanitizedLogger.shared.log(.cofreDesbloqueado(metodo: "credencial"))
             return true
@@ -208,6 +437,16 @@ public final class VaultAccessManager: ObservableObject {
         }
         itens = restoredItems
         tipoCredencialConfigurada = await store.obterTipoCredencial()
+        if var atual = cofreAtivo {
+            atual.tipoCredencial = tipoCredencialConfigurada
+            self.cofreAtivo = atual
+            if let idx = listaCofres.firstIndex(where: { $0.id == atual.id }) {
+                listaCofres[idx] = atual
+            }
+            if let registry {
+                try? await registry.registrarCofre(atual, tornarAtivo: true)
+            }
+        }
         estadoAcesso = .desbloqueado
         tentativasFalhas = 0
         erroAcesso = nil
@@ -219,14 +458,33 @@ public final class VaultAccessManager: ObservableObject {
         pendingRestoreID = nil
         try? await store.eraseVault()
         itens.removeAll(keepingCapacity: false)
-        isConfigurado = false
+        if let cofreAtivo, let registry {
+            try? await registry.removerCofre(id: cofreAtivo.id)
+            listaCofres = (try? await registry.listarCofres()) ?? []
+            self.cofreAtivo = listaCofres.first
+            if let novoAtivo = self.cofreAtivo {
+                let dir = await registry.diretorioDoCofre(id: novoAtivo.id)
+                self.store = VaultFileStore(rootURL: dir)
+                self.tipoCredencialConfigurada = novoAtivo.tipoCredencial
+                self.estadoAcesso = .bloqueado
+                self.isConfigurado = true
+            } else {
+                self.isConfigurado = false
+                self.estadoAcesso = .naoConfigurado
+                self.cofreAtivo = nil
+            }
+        } else {
+            isConfigurado = false
+            cofreAtivo = nil
+            listaCofres.removeAll()
+            tipoCredencialConfigurada = .texto
+            estadoAcesso = .naoConfigurado
+        }
         codigoRecuperacaoPendente = nil
         ultimoBackupData = nil
         estadoBackup = .nuncaCriado
         biometriaAtiva = false
         tentativasFalhas = 0
-        tipoCredencialConfigurada = .texto
-        estadoAcesso = .naoConfigurado
         SanitizedLogger.shared.log(.cofreResetado)
     }
 

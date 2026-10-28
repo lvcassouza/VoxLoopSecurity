@@ -10,6 +10,7 @@ public struct CriarCredencialView: View {
     public let onAvancarComCodigo: (String) -> Void
     public let onVoltar: () -> Void
 
+    @State private var nomeCofre: String = ""
     @State private var tipoCredencial: TipoCredencial = .texto
 
     // Estado da senha escrita
@@ -51,14 +52,17 @@ public struct CriarCredencialView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Criar credencial principal")
+                        Text("Criar cofre")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(VoxColors.ink)
 
-                        Text("Escolha como prefere desbloquear seu cofre: digitando uma senha ou desenhando um padrão ligando os pontos.")
+                        Text("Dê um nome ao cofre e defina a credencial exclusiva para desbloqueá-lo neste aparelho.")
                             .font(.system(size: 15))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
+
+                    // Nome do cofre
+                    VoxTextField("Nome do cofre", placeholder: "Ex: Pessoal, Trabalho, Projetos", texto: $nomeCofre)
 
                     // Seletor de tipo de credencial
                     Picker("Tipo de credencial", selection: $tipoCredencial) {
@@ -105,6 +109,11 @@ public struct CriarCredencialView: View {
             }
         }
         .background(VoxColors.canvas.ignoresSafeArea())
+        .onAppear {
+            if nomeCofre.isEmpty {
+                nomeCofre = accessManager.listaCofres.isEmpty ? "Cofre Principal" : "Cofre \(accessManager.listaCofres.count + 1)"
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -220,8 +229,11 @@ public struct CriarCredencialView: View {
         processando = true
         defer { processando = false }
         mensagemErro = nil
+        let nomeFinal = nomeCofre.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (accessManager.listaCofres.isEmpty ? "Cofre Principal" : "Cofre \(accessManager.listaCofres.count + 1)")
+            : nomeCofre.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let codigo = try await accessManager.configurarCofre(credencial: credencial, confirmacao: confirmacao)
+            let codigo = try await accessManager.criarNovoCofre(nome: nomeFinal, credencial: credencial, confirmacao: confirmacao)
             onAvancarComCodigo(codigo)
         } catch let erro as VaultError {
             mensagemErro = erro.localizedDescription
