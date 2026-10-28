@@ -13,6 +13,7 @@ public struct CodigoRecuperacaoView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let codigo: String
     public let onConfirmado: () -> Void
+    public let onVoltar: (() -> Void)?
 
     @State private var trechoConfirmacao: String = ""
     @State private var mensagemErro: String?
@@ -21,15 +22,30 @@ public struct CodigoRecuperacaoView: View {
     public init(
         accessManager: VaultAccessManager,
         codigo: String,
-        onConfirmado: @escaping () -> Void
+        onConfirmado: @escaping () -> Void,
+        onVoltar: (() -> Void)? = nil
     ) {
         self.accessManager = accessManager
         self.codigo = codigo
         self.onConfirmado = onConfirmado
+        self.onVoltar = onVoltar
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            if let onVoltar {
+                HStack {
+                    Button(action: onVoltar) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(VoxColors.ink)
+                            .frame(width: 44, height: 44)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -102,9 +118,20 @@ public struct CodigoRecuperacaoView: View {
                     }
 
                     if let erro = mensagemErro {
-                        Text(erro)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(VoxColors.danger)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(erro)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(VoxColors.danger)
+
+                            if let onVoltar {
+                                Button("Voltar e definir nova credencial") {
+                                    onVoltar()
+                                }
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(VoxColors.brand)
+                                .padding(.top, 4)
+                            }
+                        }
                     }
 
                     VoxButton("Guardei meu código", variante: .primary) {

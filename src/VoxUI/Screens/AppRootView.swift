@@ -4,18 +4,76 @@ import VoxDomain
 #endif
 
 public enum FluxoOnboarding: Identifiable {
-    case criarCredencial
-    case codigoRecuperacao(String)
-    case biometria
+    case criarCofre
     case restaurar
 
     public var id: String {
         switch self {
-        case .criarCredencial: return "criarCredencial"
-        case .codigoRecuperacao: return "codigoRecuperacao"
-        case .biometria: return "biometria"
+        case .criarCofre: return "criarCofre"
         case .restaurar: return "restaurar"
         }
+    }
+}
+
+/// Fluxo modal contínuo para criação de credencial, exibição do código e biometria.
+public struct FluxoCriarCofreView: View {
+    @ObservedObject public var accessManager: VaultAccessManager
+    public let onConcluir: () -> Void
+    public let onCancelar: () -> Void
+
+    private enum Etapa {
+        case criarCredencial
+        case codigoRecuperacao(String)
+        case biometria
+    }
+
+    @State private var etapa: Etapa = .criarCredencial
+
+    public init(
+        accessManager: VaultAccessManager,
+        onConcluir: @escaping () -> Void,
+        onCancelar: @escaping () -> Void
+    ) {
+        self.accessManager = accessManager
+        self.onConcluir = onConcluir
+        self.onCancelar = onCancelar
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            VoxPrototypeDisclosureView()
+
+            switch etapa {
+            case .criarCredencial:
+                CriarCredencialView(
+                    accessManager: accessManager,
+                    onAvancarComCodigo: { codigo in
+                        etapa = .codigoRecuperacao(codigo)
+                    },
+                    onVoltar: onCancelar
+                )
+
+            case .codigoRecuperacao(let codigo):
+                CodigoRecuperacaoView(
+                    accessManager: accessManager,
+                    codigo: codigo,
+                    onConfirmado: {
+                        etapa = .biometria
+                    },
+                    onVoltar: {
+                        Task { await accessManager.cancelarConfiguracao() }
+                        etapa = .criarCredencial
+                    }
+                )
+
+            case .biometria:
+                BiometriaOptInView(
+                    accessManager: accessManager,
+                    onConcluir: onConcluir
+                )
+            }
+        }
+        .background(VoxColors.canvas)
     }
 }
 
@@ -40,7 +98,7 @@ public struct AppRootView: View {
                     BoasVindasView(
                         accessManager: accessManager,
                         onCriarCofre: {
-                            onboardingAtivo = .criarCredencial
+                            onboardingAtivo = .criarCofre
                         },
                         onRestaurarBackup: {
                             onboardingAtivo = .restaurar
@@ -96,39 +154,21 @@ public struct AppRootView: View {
                 Task { await accessManager.cancelarConfiguracao() }
             }
         }) { fluxo in
-            VStack(spacing: 0) {
-                VoxPrototypeDisclosureView()
+            switch fluxo {
+            case .criarCofre:
+                FluxoCriarCofreView(
+                    accessManager: accessManager,
+                    onConcluir: {
+                        onboardingAtivo = nil
+                    },
+                    onCancelar: {
+                        onboardingAtivo = nil
+                    }
+                )
 
-                switch fluxo {
-                case .criarCredencial:
-                    CriarCredencialView(
-                        accessManager: accessManager,
-                        onAvancarComCodigo: { codigo in
-                            onboardingAtivo = .codigoRecuperacao(codigo)
-                        },
-                        onVoltar: {
-                            onboardingAtivo = nil
-                        }
-                    )
-
-                case .codigoRecuperacao(let codigo):
-                    CodigoRecuperacaoView(
-                        accessManager: accessManager,
-                        codigo: codigo,
-                        onConfirmado: {
-                            onboardingAtivo = .biometria
-                        }
-                    )
-
-                case .biometria:
-                    BiometriaOptInView(
-                        accessManager: accessManager,
-                        onConcluir: {
-                            onboardingAtivo = nil
-                        }
-                    )
-
-                case .restaurar:
+            case .restaurar:
+                VStack(spacing: 0) {
+                    VoxPrototypeDisclosureView()
                     RestaurarView(
                         accessManager: accessManager,
                         onVoltar: {
@@ -136,8 +176,8 @@ public struct AppRootView: View {
                         }
                     )
                 }
+                .background(VoxColors.canvas)
             }
-            .background(VoxColors.canvas)
         }
     }
 }
