@@ -3,12 +3,14 @@ import SwiftUI
 import VoxDomain
 #endif
 
-/// Tela para criar a credencial principal (seção 6.2 de ui-visual-spec.md).
-/// Permite escolher entre senha escrita (texto) ou padrão (linhas ligando pontos).
+/// Tela para criar um novo cofre local no aparelho (seção 6.2 de ui-visual-spec.md).
+/// Permite escolher entre senha escrita (texto) ou padrão de pontos 3x3.
+/// Exibe aviso claro e destacado de que o armazenamento é 100% local e sem backup ("perdeu, perdeu").
 public struct CriarCredencialView: View {
     @ObservedObject public var accessManager: VaultAccessManager
-    public let onAvancarComCodigo: (String) -> Void
+    public let onConcluido: () -> Void
     public let onVoltar: () -> Void
+    public let onAvancarComCodigo: ((String) -> Void)?
 
     @State private var nomeCofre: String = ""
     @State private var tipoCredencial: TipoCredencial = .texto
@@ -22,28 +24,36 @@ public struct CriarCredencialView: View {
     @State private var padraoErro: Bool = false
     @State private var etapaConfirmacaoPadrao: Bool = false
 
+    // Confirmação explícita de ausência de backup
+    @State private var cienteSemBackup: Bool = false
+
     @State private var mensagemErro: String?
     @State private var processando = false
 
     public init(
         accessManager: VaultAccessManager,
-        onAvancarComCodigo: @escaping (String) -> Void,
+        onConcluido: @escaping () -> Void = {},
+        onAvancarComCodigo: ((String) -> Void)? = nil,
         onVoltar: @escaping () -> Void
     ) {
         self.accessManager = accessManager
+        self.onConcluido = onConcluido
         self.onAvancarComCodigo = onAvancarComCodigo
         self.onVoltar = onVoltar
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Barra superior
+            // Barra superior com voltar
             HStack {
                 Button(action: onVoltar) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(VoxColors.ink)
-                        .frame(width: 44, height: 44)
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Voltar")
+                    }
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(VoxColors.brand)
+                    .frame(height: 44)
                 }
                 Spacer()
             }
@@ -52,7 +62,7 @@ public struct CriarCredencialView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Criar cofre")
+                        Text("Criar cofre local")
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(VoxColors.ink)
 
@@ -81,6 +91,9 @@ public struct CriarCredencialView: View {
                         secaoPadraoPontos
                     }
 
+                    // Card de aviso sem backup (o momento mais oportuno)
+                    cardAvisoSemBackup
+
                     if let erro = mensagemErro {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.circle.fill")
@@ -97,10 +110,11 @@ public struct CriarCredencialView: View {
                     }
 
                     if tipoCredencial == .texto {
-                        Spacer(minLength: 24)
-                        VoxButton("Continuar", variante: .primary, isLoading: processando) {
+                        Spacer(minLength: 16)
+                        VoxButton("Criar cofre", variante: .primary, isLoading: processando) {
                             Task { await processarCriacaoTexto() }
                         }
+                        .disabled(!cienteSemBackup || credencialTexto.isEmpty || confirmacaoTexto.isEmpty)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -117,6 +131,46 @@ public struct CriarCredencialView: View {
     }
 
     // MARK: - Subviews
+
+    private var cardAvisoSemBackup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(VoxColors.warning)
+                    .font(.system(size: 18))
+                Text("Aviso importante: sem backup")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(VoxColors.ink)
+            }
+
+            Text("Este aplicativo é 100% local e não possui nuvem nem servidores. Não existe backup e não existe recuperação de senha.")
+                .font(.system(size: 13))
+                .foregroundColor(VoxColors.ink)
+
+            Text("Se você esquecer a credencial deste cofre, o acesso aos arquivos será perdido para sempre. Não teremos nada a ver com o que está salvo e não podemos recuperá-lo.")
+                .font(.system(size: 13))
+                .foregroundColor(VoxColors.ink)
+
+            Text("Perdeu a senha, perdeu o cofre.")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(VoxColors.danger)
+
+            Toggle(isOn: $cienteSemBackup) {
+                Text("Estou ciente: não há recuperação se eu esquecer a credencial.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(VoxColors.ink)
+            }
+            .toggleStyle(SwitchToggleStyle(tint: VoxColors.brand))
+            .padding(.top, 4)
+        }
+        .padding(14)
+        .background(Color(hex: "#FFF4E5"))
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color(hex: "#FFD099"), lineWidth: 1)
+        )
+    }
 
     private var secaoSenhaEscrita: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -189,6 +243,12 @@ public struct CriarCredencialView: View {
         padraoErro = false
         mensagemErro = nil
 
+        guard cienteSemBackup else {
+            padraoErro = true
+            mensagemErro = "Confirme que está ciente do aviso sem backup abaixo antes de desenhar seu padrão."
+            return
+        }
+
         if !etapaConfirmacaoPadrao {
             guard pontos.count >= PadraoDesbloqueio.minimoPontos else {
                 padraoErro = true
@@ -211,7 +271,6 @@ public struct CriarCredencialView: View {
             } else {
                 padraoErro = true
                 mensagemErro = "Os padrões não coincidem. Tente desenhar novamente."
-                // Reinicia para etapa inicial para garantir segurança
                 primeiroPadrao = nil
                 etapaConfirmacaoPadrao = false
             }
@@ -220,6 +279,10 @@ public struct CriarCredencialView: View {
 
     @MainActor
     private func processarCriacaoTexto() async {
+        guard cienteSemBackup else {
+            mensagemErro = "Confirme que está ciente do aviso sem backup antes de continuar."
+            return
+        }
         await processarComCredenciais(credencial: credencialTexto, confirmacao: confirmacaoTexto)
     }
 
@@ -233,8 +296,13 @@ public struct CriarCredencialView: View {
             ? (accessManager.listaCofres.isEmpty ? "Cofre Principal" : "Cofre \(accessManager.listaCofres.count + 1)")
             : nomeCofre.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let codigo = try await accessManager.criarNovoCofre(nome: nomeFinal, credencial: credencial, confirmacao: confirmacao)
-            onAvancarComCodigo(codigo)
+            if let onAvancarComCodigo {
+                let code = try await accessManager.criarNovoCofre(nome: nomeFinal, credencial: credencial, confirmacao: confirmacao)
+                onAvancarComCodigo(code)
+            } else {
+                try await accessManager.criarEAtivarNovoCofre(nome: nomeFinal, credencial: credencial, confirmacao: confirmacao)
+                onConcluido()
+            }
         } catch let erro as VaultError {
             mensagemErro = erro.localizedDescription
             padraoErro = true

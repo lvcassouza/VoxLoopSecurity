@@ -8,7 +8,8 @@ import VoxDomain
 /// Permite desbloquear com senha escrita ou padrão de pontos, adaptando-se ao tipo configurado.
 public struct TelaBloqueadaView: View {
     @ObservedObject public var accessManager: VaultAccessManager
-    public let onPerdiAcesso: () -> Void
+    public let onVoltarAosCofres: (() -> Void)?
+    public let onPerdiAcesso: (() -> Void)?
     public let onCriarNovoCofre: (() -> Void)?
 
     @State private var modoEntrada: TipoCredencial = .texto
@@ -20,44 +21,48 @@ public struct TelaBloqueadaView: View {
 
     public init(
         accessManager: VaultAccessManager,
-        onPerdiAcesso: @escaping () -> Void,
+        onVoltarAosCofres: (() -> Void)? = nil,
+        onPerdiAcesso: (() -> Void)? = nil,
         onCriarNovoCofre: (() -> Void)? = nil
     ) {
         self.accessManager = accessManager
+        self.onVoltarAosCofres = onVoltarAosCofres
         self.onPerdiAcesso = onPerdiAcesso
         self.onCriarNovoCofre = onCriarNovoCofre
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            if let onVoltarAosCofres {
+                HStack {
+                    Button(action: onVoltarAosCofres) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Meus cofres")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(VoxColors.brand)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+            }
+
             Spacer(minLength: 16)
 
             VStack(spacing: 16) {
                 VoxLogoView(size: modoEntrada == .padrao ? 60 : 76)
 
                 VStack(spacing: 6) {
-                    Text(accessManager.cofreAtivo?.nome ?? "Cofre bloqueado")
-                        .font(.system(size: 24, weight: .bold))
+                    Text(accessManager.cofreAtivo?.nome ?? "Cofre")
+                        .font(.system(size: 26, weight: .bold))
                         .foregroundColor(VoxColors.ink)
 
                     Text(modoEntrada == .padrao ? "Desenhe o padrão para abrir este cofre" : "Digite sua credencial para abrir este cofre")
                         .font(.system(size: 14))
                         .foregroundColor(VoxColors.inkSecondary)
                         .multilineTextAlignment(.center)
-                }
-
-                // Botão para alternar entre múltiplos cofres ou abrir gerenciador
-                Button(action: { mostrarSeletorCofres = true }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "folder.badge.gearshape")
-                        Text(accessManager.listaCofres.count > 1 ? "Trocar de cofre (\(accessManager.listaCofres.count))" : "Meus cofres")
-                    }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(VoxColors.brand)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(VoxColors.brandSoft)
-                    .clipShape(Capsule())
                 }
             }
             .padding(.horizontal, 24)
@@ -85,22 +90,26 @@ public struct TelaBloqueadaView: View {
                     .padding(.vertical, 6)
                 }
 
-                Button(action: onPerdiAcesso) {
-                    Text("Perdi o acesso")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(VoxColors.inkSecondary)
-                        .padding(.vertical, 6)
+                if let onVoltarAosCofres {
+                    Button(action: onVoltarAosCofres) {
+                        Text("Voltar para lista de cofres")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(VoxColors.inkSecondary)
+                            .padding(.vertical, 6)
+                    }
+                } else if let onPerdiAcesso {
+                    Button(action: onPerdiAcesso) {
+                        Text("Perdi o acesso")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(VoxColors.inkSecondary)
+                            .padding(.vertical, 6)
+                    }
                 }
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }
         .background(VoxColors.canvas.ignoresSafeArea())
-        .sheet(isPresented: $mostrarSeletorCofres) {
-            SeletorCofresSheet(accessManager: accessManager) {
-                onCriarNovoCofre?()
-            }
-        }
         .onAppear {
             modoEntrada = accessManager.tipoCredencialConfigurada
         }

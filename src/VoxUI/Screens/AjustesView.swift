@@ -11,7 +11,6 @@ public struct AjustesView: View {
     public let onCriarNovoCofre: () -> Void
 
     @State private var mostrarTrocarCredencial: Bool = false
-    @State private var mostrarNovoCodigo: Bool = false
     @State private var mostrarDiagnosticoHardware: Bool = false
     @State private var mostrarConfirmacaoApagarCofre: Bool = false
     @State private var mostrarSeletorCofres: Bool = false
@@ -54,29 +53,30 @@ public struct AjustesView: View {
                 Section("Desbloqueio") {
                     LabeledContent("Biometria", value: "Ainda não disponível")
 
-                    Button("Trocar credencial com código de recuperação") {
-                        mostrarTrocarCredencial = true
-                    }
-                    .foregroundColor(VoxColors.ink)
-
-                    Button("Bloquear cofre agora") {
+                    Button("Bloquear e voltar aos cofres") {
                         onBloquearManualmente()
                     }
                     .foregroundColor(VoxColors.brand)
                 }
 
-                // 2. Recuperação
+                // 2. Segurança e Sem Backup
                 Section {
-                    Button("Sobre o código de recuperação") {
-                        mostrarNovoCodigo = true
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(VoxColors.warning)
+                                .font(.system(size: 14))
+                            Text("Sem backup e sem recuperação")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(VoxColors.ink)
+                        }
+                        Text("Este cofre é estritamente local no aparelho. Não existe sincronização em nuvem nem recuperação de credencial. Se você esquecer a senha ou padrão deste cofre, o acesso aos arquivos será perdido permanentemente (perdeu, perdeu).")
+                            .font(.system(size: 13))
+                            .foregroundColor(VoxColors.inkSecondary)
                     }
-                    .foregroundColor(VoxColors.ink)
+                    .padding(.vertical, 4)
                 } header: {
-                    Text("Recuperação")
-                } footer: {
-                    Text("O código recupera o acesso local caso você esqueça sua credencial principal.")
-                        .font(.system(size: 12))
-                        .foregroundColor(VoxColors.inkSecondary)
+                    Text("Segurança e Recuperação")
                 }
 
                 // 3. Privacidade
@@ -122,7 +122,7 @@ public struct AjustesView: View {
                         Text("Armazenamento soberano")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(VoxColors.ink)
-                        Text("A seleção lê os arquivos escolhidos, grava cópias cifradas no sandbox e mantém as origens na Fototeca. O backup portátil (.voxbackup) e a verificação estão disponíveis na aba Backup.")
+                        Text("A seleção lê os arquivos escolhidos e grava cópias cifradas exclusivamente no sandbox deste aparelho. Os arquivos originais na Fototeca permanecem intactos. Não há envio para servidores ou nuvem.")
                             .font(.system(size: 12))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
@@ -161,9 +161,6 @@ public struct AjustesView: View {
             .listStyle(.inset)
             #endif
             .navigationTitle("Ajustes")
-            .sheet(isPresented: $mostrarNovoCodigo) {
-                StatusRecuperacaoSheet()
-            }
             .sheet(isPresented: $mostrarTrocarCredencial) {
                 TrocarCredencialSheet(accessManager: accessManager)
             }
@@ -196,38 +193,6 @@ public struct AjustesView: View {
         formatter.allowedUnits = [.useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: total)
-    }
-}
-
-struct StatusRecuperacaoSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Código de recuperação")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(VoxColors.ink)
-
-                Text("O código gerado na configuração abre o envelope local da chave e permite redefinir a credencial. Ele não recria arquivos sem um backup. Esta fase ainda não cria nem restaura backups; guarde o código fora do aparelho e não use mídia pessoal neste protótipo.")
-                    .font(.system(size: 15))
-                    .foregroundColor(VoxColors.inkSecondary)
-
-                Spacer()
-
-                VoxButton("Entendido", variante: .primary) {
-                    dismiss()
-                }
-            }
-            .padding(24)
-            .background(VoxColors.canvas.ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fechar") { dismiss() }
-                        .foregroundColor(VoxColors.brand)
-                }
-            }
-        }
     }
 }
 

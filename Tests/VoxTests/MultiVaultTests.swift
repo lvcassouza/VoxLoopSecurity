@@ -170,4 +170,25 @@ final class MultiVaultTests: XCTestCase {
         XCTAssertTrue(desbloqueouB)
         XCTAssertEqual(manager.estadoAcesso, EstadoAcesso.desbloqueado)
     }
+
+    func testDirectAtomicVaultCreationWithoutRecoveryCode() async throws {
+        let manager = VaultAccessManager(multiVaultDirectory: baseDirectory)
+        let senha = credencialAmbiente("PADRAO_DESBLOQUEIO_ATOMIC", fallback: "senha-longa-exclusiva-atomic-123")
+        let cofre = try await manager.criarEAtivarNovoCofre(nome: "Finanças", credencial: senha, confirmacao: senha)
+
+        XCTAssertEqual(cofre.nome, "Finanças")
+        XCTAssertEqual(manager.cofreAtivo?.nome, "Finanças")
+        XCTAssertEqual(manager.estadoAcesso, EstadoAcesso.desbloqueado)
+        XCTAssertEqual(manager.listaCofres.count, 1)
+
+        // Bloquear e voltar
+        manager.bloquearCofre()
+        XCTAssertEqual(manager.estadoAcesso, EstadoAcesso.bloqueado)
+        XCTAssertTrue(manager.itens.isEmpty)
+
+        // Desbloquear com senha definida
+        let desbloqueou = await manager.desbloquearComCredencial(senha)
+        XCTAssertTrue(desbloqueou)
+        XCTAssertEqual(manager.estadoAcesso, EstadoAcesso.desbloqueado)
+    }
 }

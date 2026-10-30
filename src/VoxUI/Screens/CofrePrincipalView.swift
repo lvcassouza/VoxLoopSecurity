@@ -8,7 +8,7 @@ public struct CofrePrincipalView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onAbrirItem: (ItemDoCofre) -> Void
     public let onAbrirAjustes: () -> Void
-    public let onAbrirBackup: () -> Void
+    public let onVoltarAosCofres: () -> Void
     public let onCriarNovoCofre: () -> Void
 
     @State private var modoSelecao: Bool = false
@@ -36,13 +36,13 @@ public struct CofrePrincipalView: View {
         accessManager: VaultAccessManager,
         onAbrirItem: @escaping (ItemDoCofre) -> Void,
         onAbrirAjustes: @escaping () -> Void,
-        onAbrirBackup: @escaping () -> Void,
+        onVoltarAosCofres: @escaping () -> Void = {},
         onCriarNovoCofre: @escaping () -> Void = {}
     ) {
         self.accessManager = accessManager
         self.onAbrirItem = onAbrirItem
         self.onAbrirAjustes = onAbrirAjustes
-        self.onAbrirBackup = onAbrirBackup
+        self.onVoltarAosCofres = onVoltarAosCofres
         self.onCriarNovoCofre = onCriarNovoCofre
     }
 
@@ -51,42 +51,6 @@ public struct CofrePrincipalView: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     VStack(spacing: 16) {
-                        // Card de status do backup (se desatualizado)
-                        if case .desatualizado = accessManager.estadoBackup {
-                            Button(action: onAbrirBackup) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                        .foregroundColor(VoxColors.warning)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .frame(width: 30, height: 30)
-                                        .background(Color.white)
-                                        .cornerRadius(10)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Demonstração de backup desatualizada")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(VoxColors.ink)
-                                        Text("Há itens sintéticos ainda não incluídos no estado de exemplo.")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(VoxColors.inkSecondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(VoxColors.inkSecondary)
-                                }
-                                .padding(14)
-                                .background(Color(hex: "#FFF3D7"))
-                                .cornerRadius(16)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(Color(hex: "#EFDBAD"), lineWidth: 1)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 20)
-                        }
-
                         // Campo de busca local
                         if exibirCampoBusca {
                             HStack {
@@ -220,19 +184,30 @@ public struct CofrePrincipalView: View {
             #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if !accessManager.itens.isEmpty {
-                        Button(modoSelecao ? "Concluído" : "Selecionar") {
-                            modoSelecao.toggle()
-                            if !modoSelecao { itensSelecionados.removeAll() }
+                    if modoSelecao {
+                        Button("Concluído") {
+                            modoSelecao = false
+                            itensSelecionados.removeAll()
                         }
                         .foregroundColor(VoxColors.brand)
+                    } else {
+                        Button(action: onVoltarAosCofres) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                Text("Cofres")
+                            }
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(VoxColors.brand)
+                        }
                     }
                 }
 
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button(action: { mostrarSeletorCofres = true }) {
-                        Image(systemName: "rectangle.stack")
-                            .foregroundColor(VoxColors.ink)
+                    if !accessManager.itens.isEmpty && !modoSelecao {
+                        Button("Selecionar") {
+                            modoSelecao = true
+                        }
+                        .foregroundColor(VoxColors.brand)
                     }
 
                     Button(action: { exibirCampoBusca.toggle() }) {
@@ -249,19 +224,30 @@ public struct CofrePrincipalView: View {
             #else
             .toolbar {
                 ToolbarItem(placement: .navigation) {
-                    if !accessManager.itens.isEmpty {
-                        Button(modoSelecao ? "Concluído" : "Selecionar") {
-                            modoSelecao.toggle()
-                            if !modoSelecao { itensSelecionados.removeAll() }
+                    if modoSelecao {
+                        Button("Concluído") {
+                            modoSelecao = false
+                            itensSelecionados.removeAll()
                         }
                         .foregroundColor(VoxColors.brand)
+                    } else {
+                        Button(action: onVoltarAosCofres) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.left")
+                                Text("Cofres")
+                            }
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(VoxColors.brand)
+                        }
                     }
                 }
 
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button(action: { mostrarSeletorCofres = true }) {
-                        Image(systemName: "rectangle.stack")
-                            .foregroundColor(VoxColors.ink)
+                    if !accessManager.itens.isEmpty && !modoSelecao {
+                        Button("Selecionar") {
+                            modoSelecao = true
+                        }
+                        .foregroundColor(VoxColors.brand)
                     }
 
                     Button(action: { exibirCampoBusca.toggle() }) {

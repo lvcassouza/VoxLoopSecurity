@@ -5,27 +5,29 @@ import VoxDomain
 
 public enum DestinoAba: Hashable {
     case cofre
-    case backup
     case ajustes
 }
 
-/// Barra inferior nativa com três abas (seção 5 de ui-visual-spec.md).
+/// Interface interna de um cofre desbloqueado: Grade de itens e Ajustes do cofre.
+/// Não há login, não há nuvem e não há aba de backup (100% local, "perdeu, perdeu").
 public struct MainTabView: View {
     @ObservedObject public var accessManager: VaultAccessManager
     public let onBloquearManualmente: () -> Void
+    public let onVoltarAosCofres: () -> Void
     public let onCriarNovoCofre: () -> Void
 
     @State private var abaSelecionada: DestinoAba = .cofre
     @State private var itemDetalheAberto: ItemDoCofre?
-    @State private var abrirRestauracao: Bool = false
 
     public init(
         accessManager: VaultAccessManager,
         onBloquearManualmente: @escaping () -> Void,
+        onVoltarAosCofres: @escaping () -> Void = {},
         onCriarNovoCofre: @escaping () -> Void = {}
     ) {
         self.accessManager = accessManager
         self.onBloquearManualmente = onBloquearManualmente
+        self.onVoltarAosCofres = onVoltarAosCofres
         self.onCriarNovoCofre = onCriarNovoCofre
     }
 
@@ -39,9 +41,7 @@ public struct MainTabView: View {
                 onAbrirAjustes: {
                     abaSelecionada = .ajustes
                 },
-                onAbrirBackup: {
-                    abaSelecionada = .backup
-                },
+                onVoltarAosCofres: onVoltarAosCofres,
                 onCriarNovoCofre: onCriarNovoCofre
             )
             .tabItem {
@@ -49,20 +49,9 @@ public struct MainTabView: View {
             }
             .tag(DestinoAba.cofre)
 
-            BackupView(
-                accessManager: accessManager,
-                onNavegarParaRestauracao: {
-                    abrirRestauracao = true
-                }
-            )
-            .tabItem {
-                Label("Backup", systemImage: "externaldrive")
-            }
-            .tag(DestinoAba.backup)
-
             AjustesView(
                 accessManager: accessManager,
-                onBloquearManualmente: onBloquearManualmente,
+                onBloquearManualmente: onVoltarAosCofres,
                 onCriarNovoCofre: onCriarNovoCofre
             )
             .tabItem {
@@ -88,11 +77,5 @@ public struct MainTabView: View {
             )
         }
         #endif
-        .sheet(isPresented: $abrirRestauracao) {
-            RestaurarView(
-                accessManager: accessManager,
-                onVoltar: { abrirRestauracao = false }
-            )
-        }
     }
 }

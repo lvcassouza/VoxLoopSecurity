@@ -226,6 +226,21 @@ public final class VaultAccessManager: ObservableObject {
         }
     }
 
+    /// Cria e ativa o cofre diretamente de forma atômica no armazenamento local.
+    /// Como o aplicativo não possui backup em nuvem nem recuperação ("perdeu, perdeu"),
+    /// a inicialização conclui imediatamente a escrita do cabeçalho e chave, deixando o cofre pronto e desbloqueado.
+    @discardableResult
+    public func criarEAtivarNovoCofre(
+        nome: String = "Meu Cofre",
+        credencial: String,
+        confirmacao: String
+    ) async throws -> DescritorCofre {
+        let code = try await criarNovoCofre(nome: nome, credencial: credencial, confirmacao: confirmacao)
+        try await confirmarCodigoRecuperacao(trechoDigitado: code)
+        guard let cofre = cofreAtivo else { throw VaultError.operacaoInterrompida }
+        return cofre
+    }
+
     public func confirmarCodigoRecuperacao(trechoDigitado: String) async throws {
         guard let pending = codigoRecuperacaoPendente,
               let descritor = pendingSetupDescriptor else {

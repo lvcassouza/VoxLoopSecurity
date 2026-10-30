@@ -23,20 +23,9 @@ Cópia de um arquivo de origem incorporada ao cofre, independente do arquivo de 
 _Evitar_: original
 
 **Credencial principal**:
-Senha ou frase definida pela pessoa para criar e desbloquear seu cofre.
-_Evitar_: padrão visual, biometria
+Senha ou padrão de pontos definido pela pessoa para criar e desbloquear seu cofre.
+_Evitar_: login, conta, biometria obrigatória
 
-**Código de recuperação**:
-Segredo separado da credencial principal, guardado pela pessoa para recuperar o acesso quando esquecer essa credencial.
-
-**Backup do cofre**:
-Cópia dos itens do cofre destinada à restauração em outro aparelho.
-_Evitar_: sincronização
-
-**Verificação de backup**:
-Conferência de que um backup pode ser lido sem substituir os itens do cofre atual.
-_Evitar_: restauração
-
-**Restauração**:
-Criação de um cofre a partir dos itens presentes em um backup disponível.
-_Evitar_: recuperação de arquivos sem backup
+**Armazenamento soberano 100% local**:
+Todo o conteúdo e as chaves residem estritamente no sandbox deste aparelho. Não há servidores, telemetria, nuvem ou login. Não existe backup em nuvem nem suporte remoto para recuperar arquivos: esqueceu a credencial, o acesso é irrecuperável ("perdeu, perdeu").
+_Evitar_: nuvem, sync, backup remoto, conta Voxloop.
