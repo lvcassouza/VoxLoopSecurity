@@ -17,11 +17,8 @@ public struct AppRootView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            VoxPrototypeDisclosureView()
-
-            ZStack {
-                if accessManager.estadoAcesso == .desbloqueado {
+        ZStack {
+            if accessManager.estadoAcesso == .desbloqueado {
                     MainTabView(
                         accessManager: accessManager,
                         onBloquearManualmente: {
@@ -49,7 +46,6 @@ public struct AppRootView: View {
                         .transition(.opacity)
                         .zIndex(999)
                 }
-            }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {

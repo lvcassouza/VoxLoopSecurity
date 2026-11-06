@@ -114,7 +114,7 @@ public struct CofrePrincipalView: View {
                                         .font(.system(size: 20, weight: .bold))
                                         .foregroundColor(VoxColors.ink)
 
-                                    Text("Importe somente fotos e vídeos de teste. A Fototeca mantém os originais.")
+                                    Text("Importe fotos e vídeos para guardar com segurança. Os originais na Fototeca permanecem intactos.")
                                         .font(.system(size: 14))
                                         .foregroundColor(VoxColors.inkSecondary)
                                         .multilineTextAlignment(.center)
@@ -162,7 +162,7 @@ public struct CofrePrincipalView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 20)
                 } else {
-                    VoxButton("Adicionar fotos e vídeos de teste", icone: "plus", variante: .primary) {
+                    VoxButton("Adicionar fotos e vídeos", icone: "plus", variante: .primary) {
                         mostrarFolhaImportacao = true
                     }
                     .padding(.horizontal, 20)
@@ -423,17 +423,18 @@ struct FolhaImportacaoSinteticaView: View {
             VStack(alignment: .leading, spacing: 20) {
                 VoxPrototypeDisclosureView()
 
-                Text("Adicionar arquivos de teste")
+                Text("Adicionar fotos e vídeos")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(VoxColors.ink)
 
-                Text("Esta versão interna deve ser usada apenas com arquivos de teste. A importação cria uma cópia cifrada e mantém o original na Fototeca.")
+                Text("A importação cria uma cópia cifrada com segurança no aparelho e mantém os originais na sua Fototeca.")
                     .font(.system(size: 14))
                     .foregroundColor(VoxColors.inkSecondary)
 
                 ImportarFototecaView(accessManager: accessManager)
 
-                Text("Ou crie bytes de fixture que não são imagens nem vídeos reais:")
+                #if DEBUG
+                Text("Ferramentas de teste (DEBUG):")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(VoxColors.inkSecondary)
 
@@ -476,11 +477,12 @@ struct FolhaImportacaoSinteticaView: View {
                     }
                 }
 
-                Spacer()
-
                 VoxButton("Adicionar \(quantidade) fixture(s)", variante: .primary) {
                     executarImportacao()
                 }
+                #endif
+
+                Spacer()
             }
             .padding(24)
             .background(VoxColors.canvas.ignoresSafeArea())

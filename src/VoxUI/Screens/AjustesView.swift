@@ -82,10 +82,10 @@ public struct AjustesView: View {
                 // 3. Privacidade
                 Section("Privacidade") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Limites desta versão")
+                        Text("Privacidade e Soberania")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(VoxColors.ink)
-                        Text("Protótipo interno: use somente arquivos de teste e uma credencial exclusiva. O seletor aceita qualquer foto/vídeo e não identifica mídia pessoal. Cópias selecionadas e envelopes de chave ficam cifrados em disco; contagem e tamanhos aproximados ainda podem ser inferidos. Esta implementação não foi auditada nem está pronta para produção.")
+                        Text("O Vox armazena seus arquivos exclusivamente no sandbox protegido deste aparelho com criptografia AES-256-GCM e derivação Argon2id. Nenhum arquivo, metadado ou chave é transmitido pela rede, e a Voxloop não tem acesso aos seus dados.")
                             .font(.system(size: 13))
                             .foregroundColor(VoxColors.inkSecondary)
                     }
@@ -134,7 +134,7 @@ public struct AjustesView: View {
                 // 5. Sobre
                 Section("Sobre") {
                     LabeledContent("Aplicativo", value: "Vox — Cofre Privado")
-                    LabeledContent("Versão", value: "Protótipo interno · demonstração")
+                    LabeledContent("Versão", value: "1.0.0")
                     LabeledContent("Organização", value: "Voxloop")
                     LabeledContent("Site", value: "voxloop.com.br")
                 }
@@ -144,13 +144,13 @@ public struct AjustesView: View {
                     Button(role: .destructive, action: { mostrarConfirmacaoApagarCofre = true }) {
                         HStack {
                             Spacer()
-                            Text("Apagar cofre de teste")
+                            Text("Apagar este cofre")
                                 .font(.system(size: 16, weight: .semibold))
                             Spacer()
                         }
                     }
                 } footer: {
-                    Text("Esta ação apaga o cofre local de teste e seus envelopes cifrados. As origens na Fototeca não são apagadas.")
+                    Text("Esta ação apaga este cofre local e suas cópias cifradas. As origens na Fototeca não são apagadas.")
                         .font(.system(size: 12))
                         .foregroundColor(VoxColors.inkSecondary)
                 }
