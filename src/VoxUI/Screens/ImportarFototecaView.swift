@@ -17,11 +17,11 @@ struct ImportarFototecaView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Importar arquivos de teste")
+            Text("Importar fotos e vídeos")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(VoxColors.ink)
 
-            Text("Escolha somente fotos e vídeos de teste. O seletor também permite mídia pessoal e o Vox não consegue distingui-la. Uma cópia cifrada é gravada no cofre; o original permanece na Fototeca.")
+            Text("Selecione fotos e vídeos para guardar com segurança no cofre. Uma cópia cifrada é gravada no aparelho; o arquivo original permanece na sua Fototeca.")
                 .font(.system(size: 14))
                 .foregroundColor(VoxColors.inkSecondary)
 
